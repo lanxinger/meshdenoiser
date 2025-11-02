@@ -108,13 +108,11 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: ${{ matrix.artifact_name }}.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to release (Windows)
         if: github.event_name == 'release' && runner.os == 'Windows'
         uses: softprops/action-gh-release@v1
         with:
           files: ${{ matrix.artifact_name }}.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
