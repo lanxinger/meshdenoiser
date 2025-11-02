@@ -65,8 +65,8 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p artifacts
-          cp build/MeshSDFilter artifacts/
-          cp build/MeshDenoiser artifacts/
+          find build -name MeshSDFilter -type f -executable -exec cp {} artifacts/ \;
+          find build -name MeshDenoiser -type f -executable -exec cp {} artifacts/ \;
           cp MeshDenoiserDefaults.txt artifacts/
           cp README.md artifacts/
           chmod +x artifacts/MeshSDFilter
@@ -76,8 +76,8 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           mkdir artifacts
-          copy build\${{ matrix.build_type }}\MeshSDFilter.exe artifacts\
-          copy build\${{ matrix.build_type }}\MeshDenoiser.exe artifacts\
+          Get-ChildItem -Path build -Recurse -Filter MeshSDFilter.exe | ForEach-Object { Copy-Item $_.FullName -Destination artifacts\ }
+          Get-ChildItem -Path build -Recurse -Filter MeshDenoiser.exe | ForEach-Object { Copy-Item $_.FullName -Destination artifacts\ }
           copy MeshDenoiserDefaults.txt artifacts\
           copy README.md artifacts\
 
