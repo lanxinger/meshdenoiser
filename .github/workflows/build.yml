@@ -65,8 +65,8 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p artifacts
-          find build -name MeshSDFilter -type f -executable -exec cp {} artifacts/ \;
-          find build -name MeshDenoiser -type f -executable -exec cp {} artifacts/ \;
+          find build -name MeshSDFilter -type f -exec cp {} artifacts/ \;
+          find build -name MeshDenoiser -type f -exec cp {} artifacts/ \;
           cp MeshDenoiserDefaults.txt artifacts/
           cp README.md artifacts/
           chmod +x artifacts/MeshSDFilter
