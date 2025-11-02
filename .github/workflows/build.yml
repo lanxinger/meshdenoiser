@@ -37,7 +37,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libeigen3-dev
+          sudo apt-get install -y build-essential cmake libeigen3-dev patchelf
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -74,6 +74,34 @@ jobs:
           cp README.md artifacts/
           chmod +x artifacts/MeshSDFilter
           chmod +x artifacts/MeshDenoiser
+
+          # Bundle OpenMesh libraries and fix rpath
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            mkdir -p artifacts/lib
+            find build -name "libOpenMesh*.dylib" -exec cp {} artifacts/lib/ \;
+
+            # Fix rpath for both executables
+            for exe in artifacts/MeshSDFilter artifacts/MeshDenoiser; do
+              if [ -f "$exe" ]; then
+                # Get list of OpenMesh libraries this executable depends on
+                otool -L "$exe" | grep libOpenMesh | awk '{print $1}' | while read lib; do
+                  libname=$(basename "$lib")
+                  # Change the rpath to look in the lib directory next to the executable
+                  install_name_tool -change "$lib" "@executable_path/lib/$libname" "$exe"
+                done
+              fi
+            done
+          elif [ "$RUNNER_OS" == "Linux" ]; then
+            mkdir -p artifacts/lib
+            find build -name "libOpenMesh*.so*" -exec cp {} artifacts/lib/ \;
+
+            # Set rpath for both executables to look in lib directory
+            for exe in artifacts/MeshSDFilter artifacts/MeshDenoiser; do
+              if [ -f "$exe" ]; then
+                patchelf --set-rpath '$ORIGIN/lib' "$exe" || true
+              fi
+            done
+          fi
 
       - name: Prepare artifacts (Windows)
         if: runner.os == 'Windows'
