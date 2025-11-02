@@ -1,4 +1,4 @@
-# meshsdfilter-builder
+# meshdenoiser
 
 A tiny, cross‑platform CMake repo that **uses the MeshSDFilter code from AliceVision** at commit
 `14b0b8f8b3026765d165dfc3f219ed8c53635f52` and builds the two binaries:
@@ -55,9 +55,30 @@ cmake --build build --config Release
 # Binaries will be under build/Release/
 ```
 
-## CI
+## CI / Pre-built Binaries
 - GitHub Actions build and upload artifacts for Ubuntu, macOS, Windows.
 - Artifacts include the two binaries per platform (`MeshSDFilter`, `MeshDenoiser`).
+- Download the latest release binaries from the [Releases page](../../releases).
+
+### macOS Security Note
+When running downloaded binaries on macOS, you may see a security warning. To fix this:
+
+**Option 1 - Right-click method (Recommended):**
+1. Right-click (or Control+click) on `MeshDenoiser` or `MeshSDFilter`
+2. Select "Open" from the menu
+3. Click "Open" in the security dialog
+4. After doing this once, you can run the binary normally from Terminal
+
+**Option 2 - Command line:**
+```bash
+# Remove quarantine attribute from all files in the download
+xattr -cr meshdenoiser-macos/
+```
+
+**Option 3 - System Settings:**
+1. Try to run the binary (it will be blocked)
+2. Go to System Settings → Privacy & Security
+3. Scroll down and click "Open Anyway" next to the blocked app message
 
 ## Licensing
 - **MeshSDFilter** code is BSD-3-Clause (see `LICENSES/MeshSDFilter-BSD-3-Clause.txt`).

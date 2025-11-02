@@ -89,6 +89,16 @@ jobs:
                   # Change the rpath to look in the lib directory next to the executable
                   install_name_tool -change "$lib" "@executable_path/lib/$libname" "$exe"
                 done
+
+                # Ad-hoc code sign to avoid some security warnings
+                codesign --force --deep --sign - "$exe"
+              fi
+            done
+
+            # Also sign the libraries
+            for lib in artifacts/lib/*.dylib; do
+              if [ -f "$lib" ]; then
+                codesign --force --sign - "$lib"
               fi
             done
           elif [ "$RUNNER_OS" == "Linux" ]; then
