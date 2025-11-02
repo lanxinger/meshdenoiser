@@ -1,0 +1,117 @@
+name: Build Multi-Platform Binaries
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ created ]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: meshdenoiser-linux
+            build_type: Release
+          - os: macos-latest
+            artifact_name: meshdenoiser-macos
+            build_type: Release
+          - os: windows-latest
+            artifact_name: meshdenoiser-windows
+            build_type: Release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libeigen3-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake eigen
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install eigen3
+
+      - name: Configure CMake (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_TOOLCHAIN_FILE="${env:VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: |
+          cmake --build build --config ${{ matrix.build_type }} -j
+
+      - name: Prepare artifacts (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p artifacts
+          cp build/MeshSDFilter artifacts/
+          cp build/MeshDenoiser artifacts/
+          cp MeshDenoiserDefaults.txt artifacts/
+          cp README.md artifacts/
+          chmod +x artifacts/MeshSDFilter
+          chmod +x artifacts/MeshDenoiser
+
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir artifacts
+          copy build\${{ matrix.build_type }}\MeshSDFilter.exe artifacts\
+          copy build\${{ matrix.build_type }}\MeshDenoiser.exe artifacts\
+          copy MeshDenoiserDefaults.txt artifacts\
+          copy README.md artifacts\
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifacts/
+          retention-days: 30
+
+      - name: Create release archive (Linux/macOS)
+        if: github.event_name == 'release' && runner.os != 'Windows'
+        run: |
+          cd artifacts
+          tar -czf ../${{ matrix.artifact_name }}.tar.gz *
+
+      - name: Create release archive (Windows)
+        if: github.event_name == 'release' && runner.os == 'Windows'
+        run: |
+          cd artifacts
+          Compress-Archive -Path * -DestinationPath ..\${{ matrix.artifact_name }}.zip
+
+      - name: Upload to release (Linux/macOS)
+        if: github.event_name == 'release' && runner.os != 'Windows'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.artifact_name }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to release (Windows)
+        if: github.event_name == 'release' && runner.os == 'Windows'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.artifact_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
