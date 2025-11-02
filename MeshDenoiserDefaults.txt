@@ -1,0 +1,11 @@
+# Default options for MeshDenoiser tuned for detail-preserving cleanup.
+#
+# Reduce OuterIterations or Lambda for even lighter touch; raise them (or Eta) if you need more smoothing.
+
+Lambda 0.15
+Eta 2.2
+Mu 0.2
+Nu 0.25
+MeshUpdateClosenessWeight 0.001
+MeshUpdateIterations 20
+OuterIterations 1

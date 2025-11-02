@@ -1,0 +1,7 @@
+{
+  "name": "meshsdfilter-builder",
+  "version-string": "0.1.0",
+  "dependencies": [
+    { "name": "eigen3" }
+  ]
+}

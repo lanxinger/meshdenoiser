@@ -1,0 +1,2 @@
+Placeholder for the OpenMesh license text from the upstream external/OpenMesh directory.
+Replace this file with the exact text to preserve notices.
