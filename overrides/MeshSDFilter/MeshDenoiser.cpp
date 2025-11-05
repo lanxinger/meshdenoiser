@@ -408,8 +408,12 @@ bool load_usd_mesh(const std::string &filename, TriMesh &mesh, std::string &warn
 	else if(has_extension(filename, ".usda")){
 		success = tinyusdz::LoadUSDAFromFile(filename, &stage, &warn, &err);
 	}
+	else if(has_extension(filename, ".usd")){
+		// Generic .usd extension - auto-detect format (ASCII or binary)
+		success = tinyusdz::LoadUSDFromFile(filename, &stage, &warn, &err);
+	}
 	else{
-		error = "Unsupported USD file extension. Supported: .usdz, .usdc, .usda";
+		error = "Unsupported USD file extension. Supported: .usd, .usda, .usdc, .usdz";
 		return false;
 	}
 
