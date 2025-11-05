@@ -59,6 +59,8 @@
 namespace
 {
 
+using namespace tinyusdz;  // For tydra namespace access
+
 std::string to_lower_copy(std::string str)
 {
 	std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
