@@ -56,26 +56,21 @@ if(NOT tinygltf_POPULATED)
 endif()
 
 set(_TINYUSDZ_URL "https://github.com/lighttransport/tinyusdz/archive/refs/heads/release.zip")
+
+# TinyUSDZ build options must be set BEFORE FetchContent
+set(TINYUSDZ_PRODUCTION_BUILD ON CACHE BOOL "" FORCE)
+set(TINYUSDZ_WITH_OPENSUBDIV OFF CACHE BOOL "" FORCE)
+set(TINYUSDZ_WITH_AUDIO OFF CACHE BOOL "" FORCE)
+set(TINYUSDZ_WITH_EXR OFF CACHE BOOL "" FORCE)
+set(TINYUSDZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(TINYUSDZ_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
 FetchContent_Declare(
   tinyusdz
   URL "${_TINYUSDZ_URL}"
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
-FetchContent_GetProperties(tinyusdz)
-if(NOT tinyusdz_POPULATED)
-  FetchContent_Populate(tinyusdz)
-  # TinyUSDZ needs to be built as a library
-  set(TINYUSDZ_PRODUCTION_BUILD ON CACHE BOOL "" FORCE)
-  set(TINYUSDZ_WITH_OPENSUBDIV OFF CACHE BOOL "" FORCE)
-  set(TINYUSDZ_WITH_AUDIO OFF CACHE BOOL "" FORCE)
-  set(TINYUSDZ_WITH_EXR OFF CACHE BOOL "" FORCE)
-  set(TINYUSDZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(TINYUSDZ_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  add_subdirectory("${tinyusdz_SOURCE_DIR}" "${tinyusdz_BINARY_DIR}")
-endif()
-
-# Export tinyusdz include directory for use by MeshSDFilter
-set(TINYUSDZ_INCLUDE_DIR "${tinyusdz_SOURCE_DIR}/src" CACHE INTERNAL "")
+FetchContent_MakeAvailable(tinyusdz)
 
 set(MESHSD_DIR "${alicevision_src_SOURCE_DIR}/src/dependencies/MeshSDFilter")
 
@@ -99,7 +94,8 @@ add_subdirectory("${MESHSD_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/MeshSDFilter-build
 foreach(_mesh_target MeshSDFilter MeshDenoiser)
   if(TARGET ${_mesh_target})
     target_include_directories(${_mesh_target} PRIVATE "${tinygltf_SOURCE_DIR}")
-    target_include_directories(${_mesh_target} PRIVATE "${TINYUSDZ_INCLUDE_DIR}")
+    # Add tinyusdz include directory directly
+    target_include_directories(${_mesh_target} PRIVATE "${tinyusdz_SOURCE_DIR}/src")
     target_link_libraries(${_mesh_target} tinyusdz_static)
   endif()
 endforeach()
