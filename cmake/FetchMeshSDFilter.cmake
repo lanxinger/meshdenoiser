@@ -74,6 +74,9 @@ if(NOT tinyusdz_POPULATED)
   add_subdirectory("${tinyusdz_SOURCE_DIR}" "${tinyusdz_BINARY_DIR}")
 endif()
 
+# Export tinyusdz include directory for use by MeshSDFilter
+set(TINYUSDZ_INCLUDE_DIR "${tinyusdz_SOURCE_DIR}/src" CACHE INTERNAL "")
+
 set(MESHSD_DIR "${alicevision_src_SOURCE_DIR}/src/dependencies/MeshSDFilter")
 
 if(NOT EXISTS "${MESHSD_DIR}/CMakeLists.txt")
@@ -96,7 +99,7 @@ add_subdirectory("${MESHSD_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/MeshSDFilter-build
 foreach(_mesh_target MeshSDFilter MeshDenoiser)
   if(TARGET ${_mesh_target})
     target_include_directories(${_mesh_target} PRIVATE "${tinygltf_SOURCE_DIR}")
-    target_include_directories(${_mesh_target} PRIVATE "${tinyusdz_SOURCE_DIR}/src")
-    target_link_libraries(${_mesh_target} tinyusdz::tinyusdz_static)
+    target_include_directories(${_mesh_target} PRIVATE "${TINYUSDZ_INCLUDE_DIR}")
+    target_link_libraries(${_mesh_target} tinyusdz_static)
   endif()
 endforeach()
