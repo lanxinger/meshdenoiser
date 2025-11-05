@@ -52,6 +52,10 @@
 #define TINYGLTF_USE_CPP14
 #include <tiny_gltf.h>
 
+#include "tinyusdz.hh"
+#include "tydra/render-data.hh"
+#include "tydra/scene-access.hh"
+
 namespace
 {
 
@@ -388,6 +392,156 @@ bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &war
 	return true;
 }
 
+bool load_usd_mesh(const std::string &filename, TriMesh &mesh, std::string &warning, std::string &error)
+{
+	tinyusdz::Stage stage;
+	std::string warn, err;
+
+	// Load USD file based on extension
+	bool success = false;
+	if(has_extension(filename, ".usdz")){
+		success = tinyusdz::LoadUSDZFromFile(filename, &stage, &warn, &err);
+	}
+	else if(has_extension(filename, ".usdc")){
+		success = tinyusdz::LoadUSDCFromFile(filename, &stage, &warn, &err);
+	}
+	else if(has_extension(filename, ".usda")){
+		success = tinyusdz::LoadUSDAFromFile(filename, &stage, &warn, &err);
+	}
+	else{
+		error = "Unsupported USD file extension. Supported: .usdz, .usdc, .usda";
+		return false;
+	}
+
+	if(!warn.empty()){
+		warning += warn;
+	}
+	if(!err.empty()){
+		error += err;
+	}
+	if(!success){
+		if(error.empty()){
+			error = "Unable to parse USD file.";
+		}
+		return false;
+	}
+
+	// Convert USD stage to RenderScene using Tydra
+	tydra::RenderScene render_scene;
+	tydra::RenderSceneConverter converter;
+	tydra::RenderSceneConverterEnv env(stage);
+
+	if(!converter.ConvertToRenderScene(env, &render_scene)){
+		error = "Failed to convert USD stage to render scene.";
+		return false;
+	}
+
+	if(render_scene.meshes.empty()){
+		error = "No meshes found in USD file.";
+		return false;
+	}
+
+	// Clear and prepare the output mesh
+	mesh.clear();
+	mesh.request_face_normals();
+	mesh.request_vertex_normals();
+
+	// Process all meshes in the render scene
+	for(const auto &render_mesh : render_scene.meshes){
+		if(render_mesh.points.empty()){
+			continue;
+		}
+
+		// Add vertices
+		std::vector<TriMesh::VertexHandle> vertex_handles;
+		vertex_handles.reserve(render_mesh.points.size());
+
+		for(const auto &point : render_mesh.points){
+			TriMesh::Point p(point[0], point[1], point[2]);
+			vertex_handles.push_back(mesh.add_vertex(p));
+		}
+
+		// Determine which indices to use
+		const std::vector<uint32_t> *face_indices = nullptr;
+		const std::vector<uint32_t> *face_counts = nullptr;
+
+		if(!render_mesh.triangulatedFaceVertexIndices.empty()){
+			// Use triangulated indices if available
+			face_indices = &render_mesh.triangulatedFaceVertexIndices;
+			face_counts = &render_mesh.triangulatedFaceVertexCounts;
+		}
+		else{
+			// Use original indices
+			face_indices = &render_mesh.usdFaceVertexIndices;
+			face_counts = &render_mesh.usdFaceVertexCounts;
+		}
+
+		if(face_indices->empty() || face_counts->empty()){
+			continue;
+		}
+
+		// Add faces
+		size_t index_offset = 0;
+		for(uint32_t count : *face_counts){
+			if(count == 3){
+				// Triangle - add directly
+				std::vector<TriMesh::VertexHandle> face_verts;
+				face_verts.reserve(3);
+
+				bool valid = true;
+				for(uint32_t i = 0; i < 3; ++i){
+					uint32_t idx = (*face_indices)[index_offset + i];
+					if(idx >= vertex_handles.size()){
+						valid = false;
+						break;
+					}
+					face_verts.push_back(vertex_handles[idx]);
+				}
+
+				if(valid){
+					mesh.add_face(face_verts);
+				}
+			}
+			else if(count > 3){
+				// Polygon - triangulate by fan method
+				std::vector<uint32_t> poly_indices;
+				poly_indices.reserve(count);
+
+				bool valid = true;
+				for(uint32_t i = 0; i < count; ++i){
+					uint32_t idx = (*face_indices)[index_offset + i];
+					if(idx >= vertex_handles.size()){
+						valid = false;
+						break;
+					}
+					poly_indices.push_back(idx);
+				}
+
+				if(valid){
+					// Simple fan triangulation from first vertex
+					for(uint32_t i = 1; i + 1 < count; ++i){
+						std::vector<TriMesh::VertexHandle> face_verts;
+						face_verts.push_back(vertex_handles[poly_indices[0]]);
+						face_verts.push_back(vertex_handles[poly_indices[i]]);
+						face_verts.push_back(vertex_handles[poly_indices[i + 1]]);
+						mesh.add_face(face_verts);
+					}
+				}
+			}
+
+			index_offset += count;
+		}
+	}
+
+	if(mesh.n_faces() == 0){
+		error = "No valid triangles found in USD mesh.";
+		return false;
+	}
+
+	mesh.garbage_collection();
+	return true;
+}
+
 } // anonymous namespace
 
 
@@ -410,6 +564,10 @@ int main(int argc, char **argv)
 
 	if(has_extension(input_mesh_path, ".gltf") || has_extension(input_mesh_path, ".glb")){
 		load_success = load_gltf_mesh(input_mesh_path, mesh, warning, error);
+	}
+	else if(has_extension(input_mesh_path, ".usd") || has_extension(input_mesh_path, ".usda") ||
+	        has_extension(input_mesh_path, ".usdc") || has_extension(input_mesh_path, ".usdz")){
+		load_success = load_usd_mesh(input_mesh_path, mesh, warning, error);
 	}
 	else{
 		load_success = OpenMesh::IO::read_mesh(mesh, input_mesh_path);

@@ -13,8 +13,9 @@ Dependencies are handled per‑platform (OpenMesh sources are bundled by the ups
 MeshSDFilter requires:
 - **Eigen 3.3+** (header-only)
 - **OpenMP** (optional, if compiler supports it)
-- **OpenMesh** sources – the upstream MeshSDFilter CMake builds a static OpenMesh from its bundled `external/OpenMesh` folder.
-- **tinygltf** (header-only, fetched automatically) to allow loading `.gltf` and `.glb` meshes when running `MeshDenoiser`.
+- **OpenMesh 11.0** – fetched and built automatically from source
+- **tinygltf** v2.9.6 (header-only, fetched automatically) to allow loading `.gltf` and `.glb` meshes when running `MeshDenoiser`
+- **tinyusdz** (fetched automatically) to allow loading USD formats (`.usd`, `.usda`, `.usdc`, `.usdz`) when running `MeshDenoiser`
 
 OpenMP is an open standard for shared-memory parallelism; compilers that support it (e.g. GCC, Clang with `libomp`, MSVC) let MeshSDFilter run heavy loops across multiple CPU cores.
 
@@ -93,4 +94,9 @@ MeshSDFilter FilteringOptions.txt input_mesh.ply output_mesh.ply
 MeshDenoiser DenoisingOptions.txt input_mesh.ply output_mesh.ply
 ```
 - A detail-preserving MeshDenoiser preset is in `MeshDenoiserDefaults.txt` (outer iterations 1, lambda 0.15, eta 2.2, mu 0.2, nu 0.25). Copy it to your working folder or pass it directly; raise lambda/eta or the iteration count only if you want stronger smoothing.
-- `MeshDenoiser` accepts OBJ, PLY, OFF, STL, and now `.gltf/.glb` inputs (thanks to tinygltf). If the glTF mesh contains multiple nodes, transforms are applied automatically before filtering.
+- `MeshDenoiser` accepts:
+  - Traditional formats: OBJ, PLY, OFF, STL (via OpenMesh)
+  - glTF formats: `.gltf`, `.glb` (via tinygltf)
+  - USD formats: `.usd`, `.usda`, `.usdc`, `.usdz` (via tinyusdz)
+
+  For glTF and USD files with multiple meshes or transforms, all geometry is combined and transforms are applied automatically before filtering.
