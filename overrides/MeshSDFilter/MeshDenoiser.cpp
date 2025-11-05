@@ -555,7 +555,19 @@ int main(int argc, char **argv)
 {
 	if(argc != 4)
 	{
-		std::cout << "Usage:\tMeshDenoiser  OPTION_FILE  INPUT_MESH  OUTPUT_MESH" << std::endl;
+		std::cout << "MeshDenoiser - Mesh normal denoising filter" << std::endl;
+		std::cout << std::endl;
+		std::cout << "Usage:  MeshDenoiser  OPTION_FILE  INPUT_MESH  OUTPUT_MESH" << std::endl;
+		std::cout << std::endl;
+		std::cout << "Supported input formats:" << std::endl;
+		std::cout << "  - OBJ, PLY, OFF, STL (via OpenMesh)" << std::endl;
+		std::cout << "  - glTF (.gltf, .glb)" << std::endl;
+		std::cout << "  - USD (.usd, .usda, .usdc, .usdz)" << std::endl;
+		std::cout << std::endl;
+		std::cout << "Example:" << std::endl;
+		std::cout << "  MeshDenoiser options.txt input.obj output.obj" << std::endl;
+		std::cout << "  MeshDenoiser options.txt model.gltf denoised.obj" << std::endl;
+		std::cout << "  MeshDenoiser options.txt scene.usdz clean.ply" << std::endl;
 		return 1;
 	}
 
