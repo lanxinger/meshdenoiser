@@ -89,13 +89,16 @@ if(EXISTS "${_override_dir}")
   endforeach()
 endif()
 
+# Add include directories globally before building MeshSDFilter
+# This ensures tinygltf and tinyusdz headers are available during compilation
+include_directories("${tinygltf_SOURCE_DIR}")
+include_directories("${tinyusdz_SOURCE_DIR}/src")
+
 add_subdirectory("${MESHSD_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/MeshSDFilter-build")
 
+# Link tinyusdz to the targets after they're created
 foreach(_mesh_target MeshSDFilter MeshDenoiser)
   if(TARGET ${_mesh_target})
-    target_include_directories(${_mesh_target} PRIVATE "${tinygltf_SOURCE_DIR}")
-    # Add tinyusdz include directory directly
-    target_include_directories(${_mesh_target} PRIVATE "${tinyusdz_SOURCE_DIR}/src")
     target_link_libraries(${_mesh_target} tinyusdz_static)
   endif()
 endforeach()
