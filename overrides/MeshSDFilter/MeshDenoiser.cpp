@@ -591,6 +591,27 @@ bool is_directory(const std::string &path)
 #endif
 }
 
+bool is_regular_file(const std::string &path)
+{
+#ifdef HAS_FILESYSTEM
+	return fs::is_regular_file(path);
+#else
+	#if defined(_WIN32) || defined(_WIN64)
+		DWORD attrib = GetFileAttributesA(path.c_str());
+		if(attrib == INVALID_FILE_ATTRIBUTES){
+			return false;
+		}
+		return !(attrib & FILE_ATTRIBUTE_DIRECTORY);
+	#else
+		struct stat st;
+		if(stat(path.c_str(), &st) != 0){
+			return false;
+		}
+		return S_ISREG(st.st_mode);
+	#endif
+#endif
+}
+
 bool is_supported_mesh_extension(const std::string &path)
 {
 	// List of supported extensions
@@ -877,21 +898,28 @@ int main(int argc, char **argv)
 	Eigen::initParallel();
 #endif
 
-	// Check if we're in batch processing mode (both input and output are directories)
+	// Determine processing mode based on input type
 	bool input_is_dir = is_directory(input_path);
-	bool output_is_dir = is_directory(output_path);
 
-	if(input_is_dir && output_is_dir){
-		// Batch processing mode
+	if(input_is_dir){
+		// Batch processing mode: input is a directory
+		// Check if output exists and is a regular file (error case)
+		if(is_regular_file(output_path)){
+			std::cerr << "Error: Input is a directory but output is an existing file." << std::endl;
+			std::cerr << "For batch processing, output must be a directory path (will be created if needed)." << std::endl;
+			return 1;
+		}
+		// Output is either a directory or doesn't exist yet (will be created in process_batch)
 		return process_batch(option_file, input_path, output_path);
 	}
-	else if(input_is_dir && !output_is_dir){
-		std::cerr << "Error: Input is a directory but output is not. For batch processing, both must be directories." << std::endl;
-		return 1;
-	}
-	else if(!input_is_dir && output_is_dir){
-		std::cerr << "Error: Output is a directory but input is not. For single file mode, output must be a file path." << std::endl;
-		return 1;
+	else{
+		// Single file processing mode: input is a file
+		// Check if output is an existing directory (error case - need filename)
+		if(is_directory(output_path)){
+			std::cerr << "Error: Input is a file but output is a directory." << std::endl;
+			std::cerr << "For single file mode, output must be a file path (e.g., output_dir/file.obj)." << std::endl;
+			return 1;
+		}
 	}
 
 	// Single file processing mode
