@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.18)
 project(meshsdfilter-builder LANGUAGES CXX)
 
+# Set C++17 standard for filesystem support
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED OFF)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 include(FetchContent)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 

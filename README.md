@@ -19,7 +19,7 @@ MeshSDFilter requires:
 
 OpenMP is an open standard for shared-memory parallelism; compilers that support it (e.g. GCC, Clang with `libomp`, MSVC) let MeshSDFilter run heavy loops across multiple CPU cores.
 
-> Note: MeshSDFilter expects Eigen to be discoverable via `find_package(Eigen3)`. Our CI installs Eigen per-platform so you don’t have to.
+> Note: MeshSDFilter expects Eigen to be discoverable via `find_package(Eigen3)`. Our CI installs Eigen per-platform so you don't have to.
 > You can also point CMake at a local Eigen install with `-DEIGEN3_INCLUDE_DIR=/path/to/eigen` if needed.
 
 ## Build (local)
@@ -87,13 +87,74 @@ xattr -cr meshdenoiser-macos/
 - This wrapper repo is MIT by default (you can change it), and preserves upstream notices.
 
 ## Using the tools
+
+### Single File Processing
 ```bash
 # Filter
 MeshSDFilter FilteringOptions.txt input_mesh.ply output_mesh.ply
 # Denoise
 MeshDenoiser DenoisingOptions.txt input_mesh.ply output_mesh.ply
 ```
-- A detail-preserving MeshDenoiser preset is in `MeshDenoiserDefaults.txt` (outer iterations 1, lambda 0.15, eta 2.2, mu 0.2, nu 0.25). Copy it to your working folder or pass it directly; raise lambda/eta or the iteration count only if you want stronger smoothing.
+
+### Batch Processing
+Process multiple mesh files at once by providing directories instead of individual files:
+
+```bash
+# Process all mesh files in input_dir/ and save to output_dir/
+MeshDenoiser DenoisingOptions.txt input_dir/ output_dir/
+```
+
+Batch processing features:
+- **Automatically discovers** all supported mesh files in the input directory
+- **Preserves filenames** - each output file has the same name as its input
+- **Creates output directory** if it doesn't exist
+- **Progress indicators** - animated spinner showing loading, denoising, and saving progress
+- **Real-time feedback** - displays mesh statistics (vertices, faces) and elapsed time
+- **Error handling** - continues processing remaining files if one fails
+- **Summary report** - displays success/failure counts and average processing time
+
+Example:
+```bash
+# Process a directory of scanned meshes
+MeshDenoiser MeshDenoiserDefaults.txt scanned_meshes/ cleaned_meshes/
+```
+
+Output example:
+```
+Batch processing mode
+Input directory:  scanned_meshes/
+Output directory: cleaned_meshes/
+
+Found 3 mesh file(s) to process
+
+[1/3] scan001.obj
+  Loaded mesh (12543 vertices, 25086 faces) (0.12s)
+  Complete (2.45s)
+
+[2/3] scan002.ply
+  Loaded mesh (8421 vertices, 16842 faces) (0.08s)
+  Complete (1.89s)
+
+[3/3] model.gltf
+  Loaded mesh (15632 vertices, 31264 faces) (0.15s)
+  Complete (3.12s)
+
+==================================
+Batch processing complete
+  Successful: 3
+  Failed:     0
+  Total:      3
+  Time:       7.56s (avg: 2.52s per file)
+```
+
+The progress indicator shows:
+- **Loading phase**: Spinner animation with vertex/face count on completion
+- **Denoising phase**: Spinner animation with elapsed time
+- **Saving phase**: Quick spinner during file write
+- Terminal animation works in interactive shells; falls back to simple dots in pipes/logs
+
+### Supported Formats
+- A detail-preserving MeshDenoiser preset is in `MeshDenoiserDefaults.txt` (outer iterations 1, lambda 0.15, eta 2.2, mu 0.2, nu 0.25). Copy it to your working folder or pass it directly; raise lambda/eta or the iteration count only if you want stronger smoothing.
 - `MeshDenoiser` accepts:
   - Traditional formats: OBJ, PLY, OFF, STL (via OpenMesh)
   - glTF formats: `.gltf`, `.glb` (via tinygltf)
