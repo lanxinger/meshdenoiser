@@ -19,7 +19,7 @@ MeshSDFilter requires:
 
 OpenMP is an open standard for shared-memory parallelism; compilers that support it (e.g. GCC, Clang with `libomp`, MSVC) let MeshSDFilter run heavy loops across multiple CPU cores.
 
-> Note: MeshSDFilter expects Eigen to be discoverable via `find_package(Eigen3)`. Our CI installs Eigen per-platform so you don’t have to.
+> Note: MeshSDFilter expects Eigen to be discoverable via `find_package(Eigen3)`. Our CI installs Eigen per-platform so you don't have to.
 > You can also point CMake at a local Eigen install with `-DEIGEN3_INCLUDE_DIR=/path/to/eigen` if needed.
 
 ## Build (local)
@@ -87,13 +87,63 @@ xattr -cr meshdenoiser-macos/
 - This wrapper repo is MIT by default (you can change it), and preserves upstream notices.
 
 ## Using the tools
+
+### Single File Processing
 ```bash
 # Filter
 MeshSDFilter FilteringOptions.txt input_mesh.ply output_mesh.ply
 # Denoise
 MeshDenoiser DenoisingOptions.txt input_mesh.ply output_mesh.ply
 ```
-- A detail-preserving MeshDenoiser preset is in `MeshDenoiserDefaults.txt` (outer iterations 1, lambda 0.15, eta 2.2, mu 0.2, nu 0.25). Copy it to your working folder or pass it directly; raise lambda/eta or the iteration count only if you want stronger smoothing.
+
+### Batch Processing
+Process multiple mesh files at once by providing directories instead of individual files:
+
+```bash
+# Process all mesh files in input_dir/ and save to output_dir/
+MeshDenoiser DenoisingOptions.txt input_dir/ output_dir/
+```
+
+Batch processing features:
+- **Automatically discovers** all supported mesh files in the input directory
+- **Preserves filenames** - each output file has the same name as its input
+- **Creates output directory** if it doesn't exist
+- **Progress tracking** - shows which file is being processed and overall statistics
+- **Error handling** - continues processing remaining files if one fails
+- **Summary report** - displays success/failure counts at the end
+
+Example:
+```bash
+# Process a directory of scanned meshes
+mkdir cleaned_meshes
+MeshDenoiser MeshDenoiserDefaults.txt scanned_meshes/ cleaned_meshes/
+```
+
+Output example:
+```
+Batch processing mode
+Input directory:  scanned_meshes/
+Output directory: cleaned_meshes/
+
+Found 5 mesh file(s) to process
+
+[1/5] Processing: scan001.obj
+  Success!
+
+[2/5] Processing: scan002.ply
+  Success!
+
+...
+
+==================================
+Batch processing complete
+  Successful: 5
+  Failed:     0
+  Total:      5
+```
+
+### Supported Formats
+- A detail-preserving MeshDenoiser preset is in `MeshDenoiserDefaults.txt` (outer iterations 1, lambda 0.15, eta 2.2, mu 0.2, nu 0.25). Copy it to your working folder or pass it directly; raise lambda/eta or the iteration count only if you want stronger smoothing.
 - `MeshDenoiser` accepts:
   - Traditional formats: OBJ, PLY, OFF, STL (via OpenMesh)
   - glTF formats: `.gltf`, `.glb` (via tinygltf)

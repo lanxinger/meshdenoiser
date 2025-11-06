@@ -46,6 +46,37 @@
 #include <utility>
 #include <vector>
 
+// Filesystem support
+#if __cplusplus >= 201703L
+	#include <filesystem>
+	namespace fs = std::filesystem;
+	#define HAS_FILESYSTEM
+#elif defined(_MSC_VER) && _MSC_VER >= 1900
+	#include <filesystem>
+	namespace fs = std::experimental::filesystem;
+	#define HAS_FILESYSTEM
+#elif defined(__has_include)
+	#if __has_include(<filesystem>)
+		#include <filesystem>
+		namespace fs = std::filesystem;
+		#define HAS_FILESYSTEM
+	#elif __has_include(<experimental/filesystem>)
+		#include <filesystem>
+		namespace fs = std::experimental::filesystem;
+		#define HAS_FILESYSTEM
+	#endif
+#endif
+
+#ifndef HAS_FILESYSTEM
+	#include <sys/types.h>
+	#include <sys/stat.h>
+	#if defined(_WIN32) || defined(_WIN64)
+		#include <windows.h>
+	#else
+		#include <dirent.h>
+	#endif
+#endif
+
 #define TINYGLTF_IMPLEMENTATION
 #define TINYGLTF_NO_STB_IMAGE
 #define TINYGLTF_NO_STB_IMAGE_WRITE
@@ -548,38 +579,153 @@ bool load_usd_mesh(const std::string &filename, TriMesh &mesh, std::string &warn
 	return true;
 }
 
-} // anonymous namespace
-
-
-int main(int argc, char **argv)
+// Directory and file utilities
+bool is_directory(const std::string &path)
 {
-	if(argc != 4)
-	{
-		std::cout << "MeshDenoiser - Mesh normal denoising filter" << std::endl;
-		std::cout << std::endl;
-		std::cout << "Usage:  MeshDenoiser  OPTION_FILE  INPUT_MESH  OUTPUT_MESH" << std::endl;
-		std::cout << std::endl;
-		std::cout << "Supported input formats:" << std::endl;
-		std::cout << "  - OBJ, PLY, OFF, STL (via OpenMesh)" << std::endl;
-		std::cout << "  - glTF (.gltf, .glb)" << std::endl;
-		std::cout << "  - USD (.usd, .usda, .usdc, .usdz)" << std::endl;
-		std::cout << std::endl;
-		std::cout << "Example:" << std::endl;
-		std::cout << "  MeshDenoiser options.txt input.obj output.obj" << std::endl;
-		std::cout << "  MeshDenoiser options.txt model.gltf denoised.obj" << std::endl;
-		std::cout << "  MeshDenoiser options.txt scene.usdz clean.ply" << std::endl;
-		return 1;
+#ifdef HAS_FILESYSTEM
+	return fs::is_directory(path);
+#else
+	#if defined(_WIN32) || defined(_WIN64)
+		DWORD attrib = GetFileAttributesA(path.c_str());
+		return (attrib != INVALID_FILE_ATTRIBUTES && (attrib & FILE_ATTRIBUTE_DIRECTORY));
+	#else
+		struct stat st;
+		if(stat(path.c_str(), &st) != 0){
+			return false;
+		}
+		return S_ISDIR(st.st_mode);
+	#endif
+#endif
+}
+
+bool is_supported_mesh_extension(const std::string &path)
+{
+	// List of supported extensions
+	static const std::vector<std::string> supported = {
+		".obj", ".ply", ".off", ".stl",  // OpenMesh formats
+		".gltf", ".glb",                  // glTF formats
+		".usd", ".usda", ".usdc", ".usdz" // USD formats
+	};
+
+	for(const auto &ext : supported){
+		if(has_extension(path, ext)){
+			return true;
+		}
 	}
+	return false;
+}
 
-	const std::string option_file = argv[1];
-	const std::string input_mesh_path = argv[2];
-	const std::string output_mesh_path = argv[3];
+std::vector<std::string> list_mesh_files(const std::string &directory)
+{
+	std::vector<std::string> files;
 
+#ifdef HAS_FILESYSTEM
+	try{
+		for(const auto &entry : fs::directory_iterator(directory)){
+			if(entry.is_regular_file()){
+				std::string filename = entry.path().filename().string();
+				if(is_supported_mesh_extension(filename)){
+					files.push_back(filename);
+				}
+			}
+		}
+	}
+	catch(const fs::filesystem_error &e){
+		std::cerr << "Error reading directory: " << e.what() << std::endl;
+	}
+#else
+	#if defined(_WIN32) || defined(_WIN64)
+		WIN32_FIND_DATAA find_data;
+		std::string search_path = directory + "\\*";
+		HANDLE handle = FindFirstFileA(search_path.c_str(), &find_data);
+
+		if(handle != INVALID_HANDLE_VALUE){
+			do{
+				if(!(find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)){
+					std::string filename = find_data.cFileName;
+					if(is_supported_mesh_extension(filename)){
+						files.push_back(filename);
+					}
+				}
+			}while(FindNextFileA(handle, &find_data));
+			FindClose(handle);
+		}
+	#else
+		DIR *dir = opendir(directory.c_str());
+		if(dir){
+			struct dirent *entry;
+			while((entry = readdir(dir)) != nullptr){
+				if(entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN){
+					std::string filename = entry->d_name;
+					if(is_supported_mesh_extension(filename)){
+						// Check if it's actually a regular file (for DT_UNKNOWN)
+						std::string full_path = directory + "/" + filename;
+						struct stat st;
+						if(stat(full_path.c_str(), &st) == 0 && S_ISREG(st.st_mode)){
+							files.push_back(filename);
+						}
+					}
+				}
+			}
+			closedir(dir);
+		}
+	#endif
+#endif
+
+	std::sort(files.begin(), files.end());
+	return files;
+}
+
+std::string join_path(const std::string &dir, const std::string &filename)
+{
+#ifdef HAS_FILESYSTEM
+	return (fs::path(dir) / filename).string();
+#else
+	#if defined(_WIN32) || defined(_WIN64)
+		return dir + "\\" + filename;
+	#else
+		return dir + "/" + filename;
+	#endif
+#endif
+}
+
+bool create_directory_if_not_exists(const std::string &path)
+{
+#ifdef HAS_FILESYSTEM
+	try{
+		if(!fs::exists(path)){
+			return fs::create_directories(path);
+		}
+		return true;
+	}
+	catch(const fs::filesystem_error &e){
+		std::cerr << "Error creating directory: " << e.what() << std::endl;
+		return false;
+	}
+#else
+	#if defined(_WIN32) || defined(_WIN64)
+		return CreateDirectoryA(path.c_str(), NULL) != 0 || GetLastError() == ERROR_ALREADY_EXISTS;
+	#else
+		struct stat st;
+		if(stat(path.c_str(), &st) == 0){
+			return S_ISDIR(st.st_mode);
+		}
+		return mkdir(path.c_str(), 0755) == 0;
+	#endif
+#endif
+}
+
+// Process a single mesh file
+bool process_single_mesh(const std::string &input_mesh_path,
+                         const std::string &output_mesh_path,
+                         const SDFilter::MeshDenoisingParameters &param)
+{
 	TriMesh mesh;
 	bool load_success = false;
 	std::string warning;
 	std::string error;
 
+	// Load mesh based on file extension
 	if(has_extension(input_mesh_path, ".gltf") || has_extension(input_mesh_path, ".glb")){
 		load_success = load_gltf_mesh(input_mesh_path, mesh, warning, error);
 	}
@@ -595,19 +741,167 @@ int main(int argc, char **argv)
 	}
 
 	if(!warning.empty()){
-		std::cout << "Warning while loading mesh: " << warning << std::endl;
+		std::cout << "  Warning: " << warning << std::endl;
 	}
 
-	if(!load_success)
-	{
-		std::cerr << "Error: " << error << std::endl;
+	if(!load_success){
+		std::cerr << "  Error: " << error << std::endl;
+		return false;
+	}
+
+	// Normalize the input mesh
+	Eigen::Vector3d original_center;
+	double original_scale;
+	SDFilter::normalize_mesh(mesh, original_center, original_scale);
+
+	// Filter the normals and construct the output mesh
+	SDFilter::MeshNormalDenoising denoiser(mesh);
+	TriMesh output_mesh;
+	if(!denoiser.denoise(param, output_mesh)){
+		std::cerr << "  Error: denoising failed" << std::endl;
+		return false;
+	}
+
+	SDFilter::restore_mesh(output_mesh, original_center, original_scale);
+
+	// Save output mesh
+	if(!SDFilter::write_mesh_high_accuracy(output_mesh, output_mesh_path)){
+		std::cerr << "  Error: unable to save result mesh to " << output_mesh_path << std::endl;
+		return false;
+	}
+
+	return true;
+}
+
+// Batch process all mesh files in a directory
+int process_batch(const std::string &option_file,
+                  const std::string &input_dir,
+                  const std::string &output_dir)
+{
+	// Load option file
+	SDFilter::MeshDenoisingParameters param;
+	if(!param.load(option_file.c_str())){
+		std::cerr << "Error: unable to load option file " << option_file << std::endl;
 		return 1;
 	}
+	if(!param.valid_parameters()){
+		std::cerr << "Invalid filter options. Aborting..." << std::endl;
+		return 1;
+	}
+
+	std::cout << "Batch processing mode" << std::endl;
+	std::cout << "Input directory:  " << input_dir << std::endl;
+	std::cout << "Output directory: " << output_dir << std::endl;
+	std::cout << std::endl;
+	param.output();
+	std::cout << std::endl;
+
+	// Create output directory if it doesn't exist
+	if(!create_directory_if_not_exists(output_dir)){
+		std::cerr << "Error: unable to create output directory " << output_dir << std::endl;
+		return 1;
+	}
+
+	// List all mesh files in input directory
+	std::vector<std::string> mesh_files = list_mesh_files(input_dir);
+
+	if(mesh_files.empty()){
+		std::cerr << "Error: no supported mesh files found in " << input_dir << std::endl;
+		return 1;
+	}
+
+	std::cout << "Found " << mesh_files.size() << " mesh file(s) to process" << std::endl;
+	std::cout << std::endl;
+
+	int success_count = 0;
+	int failure_count = 0;
+
+	// Process each file
+	for(size_t i = 0; i < mesh_files.size(); ++i){
+		const std::string &filename = mesh_files[i];
+		std::string input_path = join_path(input_dir, filename);
+		std::string output_path = join_path(output_dir, filename);
+
+		std::cout << "[" << (i + 1) << "/" << mesh_files.size() << "] Processing: " << filename << std::endl;
+
+		if(process_single_mesh(input_path, output_path, param)){
+			std::cout << "  Success!" << std::endl;
+			++success_count;
+		}
+		else{
+			std::cout << "  Failed!" << std::endl;
+			++failure_count;
+		}
+		std::cout << std::endl;
+	}
+
+	// Summary
+	std::cout << "==================================" << std::endl;
+	std::cout << "Batch processing complete" << std::endl;
+	std::cout << "  Successful: " << success_count << std::endl;
+	std::cout << "  Failed:     " << failure_count << std::endl;
+	std::cout << "  Total:      " << mesh_files.size() << std::endl;
+
+	return failure_count > 0 ? 1 : 0;
+}
+
+} // anonymous namespace
+
+
+int main(int argc, char **argv)
+{
+	if(argc != 4)
+	{
+		std::cout << "MeshDenoiser - Mesh normal denoising filter" << std::endl;
+		std::cout << std::endl;
+		std::cout << "Usage:  MeshDenoiser  OPTION_FILE  INPUT  OUTPUT" << std::endl;
+		std::cout << std::endl;
+		std::cout << "Single file mode:" << std::endl;
+		std::cout << "  MeshDenoiser  OPTION_FILE  INPUT_MESH  OUTPUT_MESH" << std::endl;
+		std::cout << std::endl;
+		std::cout << "Batch processing mode:" << std::endl;
+		std::cout << "  MeshDenoiser  OPTION_FILE  INPUT_DIR/  OUTPUT_DIR/" << std::endl;
+		std::cout << "  (processes all mesh files in INPUT_DIR)" << std::endl;
+		std::cout << std::endl;
+		std::cout << "Supported input formats:" << std::endl;
+		std::cout << "  - OBJ, PLY, OFF, STL (via OpenMesh)" << std::endl;
+		std::cout << "  - glTF (.gltf, .glb)" << std::endl;
+		std::cout << "  - USD (.usd, .usda, .usdc, .usdz)" << std::endl;
+		std::cout << std::endl;
+		std::cout << "Examples:" << std::endl;
+		std::cout << "  MeshDenoiser options.txt input.obj output.obj" << std::endl;
+		std::cout << "  MeshDenoiser options.txt model.gltf denoised.obj" << std::endl;
+		std::cout << "  MeshDenoiser options.txt scene.usdz clean.ply" << std::endl;
+		std::cout << "  MeshDenoiser options.txt input_dir/ output_dir/" << std::endl;
+		return 1;
+	}
+
+	const std::string option_file = argv[1];
+	const std::string input_path = argv[2];
+	const std::string output_path = argv[3];
 
 #ifdef USE_OPENMP
 	Eigen::initParallel();
 #endif
 
+	// Check if we're in batch processing mode (both input and output are directories)
+	bool input_is_dir = is_directory(input_path);
+	bool output_is_dir = is_directory(output_path);
+
+	if(input_is_dir && output_is_dir){
+		// Batch processing mode
+		return process_batch(option_file, input_path, output_path);
+	}
+	else if(input_is_dir && !output_is_dir){
+		std::cerr << "Error: Input is a directory but output is not. For batch processing, both must be directories." << std::endl;
+		return 1;
+	}
+	else if(!input_is_dir && output_is_dir){
+		std::cerr << "Error: Output is a directory but input is not. For single file mode, output must be a file path." << std::endl;
+		return 1;
+	}
+
+	// Single file processing mode
 	// Load option file
 	SDFilter::MeshDenoisingParameters param;
 	if(!param.load(option_file.c_str())){
@@ -620,26 +914,11 @@ int main(int argc, char **argv)
 	}
 	param.output();
 
-
-	// Normalize the input mesh
-	Eigen::Vector3d original_center;
-	double original_scale;
-	SDFilter::normalize_mesh(mesh, original_center, original_scale);
-
-	// Filter the normals and construct the output mesh
-	SDFilter::MeshNormalDenoising denoiser(mesh);
-	TriMesh output_mesh;
-	if(!denoiser.denoise(param, output_mesh)){
+	// Process the single mesh file
+	if(!process_single_mesh(input_path, output_path, param)){
 		return 1;
 	}
 
-	SDFilter::restore_mesh(output_mesh, original_center, original_scale);
-
-	// Save output mesh
-	if(!SDFilter::write_mesh_high_accuracy(output_mesh, output_mesh_path)){
-		std::cerr << "Error: unable to save the result mesh to file " << output_mesh_path << std::endl;
-		return 1;
-	}
-
+	std::cout << "Denoising complete!" << std::endl;
 	return 0;
 }
