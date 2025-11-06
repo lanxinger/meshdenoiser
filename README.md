@@ -108,14 +108,14 @@ Batch processing features:
 - **Automatically discovers** all supported mesh files in the input directory
 - **Preserves filenames** - each output file has the same name as its input
 - **Creates output directory** if it doesn't exist
-- **Progress tracking** - shows which file is being processed and overall statistics
+- **Progress indicators** - animated spinner showing loading, denoising, and saving progress
+- **Real-time feedback** - displays mesh statistics (vertices, faces) and elapsed time
 - **Error handling** - continues processing remaining files if one fails
-- **Summary report** - displays success/failure counts at the end
+- **Summary report** - displays success/failure counts and average processing time
 
 Example:
 ```bash
 # Process a directory of scanned meshes
-mkdir cleaned_meshes
 MeshDenoiser MeshDenoiserDefaults.txt scanned_meshes/ cleaned_meshes/
 ```
 
@@ -125,22 +125,33 @@ Batch processing mode
 Input directory:  scanned_meshes/
 Output directory: cleaned_meshes/
 
-Found 5 mesh file(s) to process
+Found 3 mesh file(s) to process
 
-[1/5] Processing: scan001.obj
-  Success!
+[1/3] scan001.obj
+  Loaded mesh (12543 vertices, 25086 faces) (0.12s)
+  Complete (2.45s)
 
-[2/5] Processing: scan002.ply
-  Success!
+[2/3] scan002.ply
+  Loaded mesh (8421 vertices, 16842 faces) (0.08s)
+  Complete (1.89s)
 
-...
+[3/3] model.gltf
+  Loaded mesh (15632 vertices, 31264 faces) (0.15s)
+  Complete (3.12s)
 
 ==================================
 Batch processing complete
-  Successful: 5
+  Successful: 3
   Failed:     0
-  Total:      5
+  Total:      3
+  Time:       7.56s (avg: 2.52s per file)
 ```
+
+The progress indicator shows:
+- **Loading phase**: Spinner animation with vertex/face count on completion
+- **Denoising phase**: Spinner animation with elapsed time
+- **Saving phase**: Quick spinner during file write
+- Terminal animation works in interactive shells; falls back to simple dots in pipes/logs
 
 ### Supported Formats
 - A detail-preserving MeshDenoiser preset is in `MeshDenoiserDefaults.txt` (outer iterations 1, lambda 0.15, eta 2.2, mu 0.2, nu 0.25). Copy it to your working folder or pass it directly; raise lambda/eta or the iteration count only if you want stronger smoothing.

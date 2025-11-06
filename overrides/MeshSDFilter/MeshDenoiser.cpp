@@ -45,6 +45,19 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
+#if defined(_WIN32) || defined(_WIN64)
+	#include <io.h>
+	#define ISATTY _isatty
+	#define FILENO _fileno
+#else
+	#include <unistd.h>
+	#define ISATTY isatty
+	#define FILENO fileno
+#endif
 
 // Filesystem support
 // Note: MSVC's std::experimental::filesystem has incomplete API, so we use native Windows API for MSVC
@@ -79,6 +92,94 @@
 #include "tinyusdz.hh"
 #include "tydra/render-data.hh"
 #include "tydra/scene-access.hh"
+
+// Simple progress indicator for terminal output
+class ProgressIndicator
+{
+public:
+	ProgressIndicator(const std::string &message, bool show_spinner = true)
+		: message_(message)
+		, show_spinner_(show_spinner && ISATTY(FILENO(stdout)))
+		, start_time_(std::chrono::steady_clock::now())
+		, spinner_index_(0)
+		, active_(true)
+	{
+		if(show_spinner_){
+			std::cout << message_ << " " << spinner_chars_[0] << std::flush;
+		}
+		else{
+			std::cout << message_ << "..." << std::flush;
+		}
+	}
+
+	~ProgressIndicator()
+	{
+		finish();
+	}
+
+	void update()
+	{
+		if(!active_ || !show_spinner_){
+			return;
+		}
+
+		spinner_index_ = (spinner_index_ + 1) % spinner_chars_.size();
+		auto now = std::chrono::steady_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time_).count();
+
+		// Clear current line and redraw
+		std::cout << "\r" << message_ << " " << spinner_chars_[spinner_index_];
+		if(elapsed > 0){
+			std::cout << " (" << elapsed << "s)";
+		}
+		std::cout << std::flush;
+	}
+
+	void finish(const std::string &final_message = "")
+	{
+		if(!active_){
+			return;
+		}
+
+		active_ = false;
+
+		auto now = std::chrono::steady_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();
+
+		if(show_spinner_){
+			std::cout << "\r";
+			// Clear the line
+			std::cout << std::string(message_.length() + 20, ' ') << "\r";
+		}
+
+		if(!final_message.empty()){
+			std::cout << final_message;
+		}
+		else{
+			std::cout << message_ << " - done";
+		}
+
+		// Show elapsed time if significant
+		if(elapsed >= 100){
+			std::cout << " (" << std::fixed << std::setprecision(2) << (elapsed / 1000.0) << "s)";
+		}
+
+		std::cout << std::endl;
+	}
+
+	void set_message(const std::string &message)
+	{
+		message_ = message;
+	}
+
+private:
+	std::string message_;
+	bool show_spinner_;
+	std::chrono::steady_clock::time_point start_time_;
+	size_t spinner_index_;
+	bool active_;
+	const std::vector<char> spinner_chars_ = {'|', '/', '-', '\\'};
+};
 
 namespace
 {
@@ -732,7 +833,9 @@ bool create_directory_if_not_exists(const std::string &path)
 // Process a single mesh file
 bool process_single_mesh(const std::string &input_mesh_path,
                          const std::string &output_mesh_path,
-                         const SDFilter::MeshDenoisingParameters &param)
+                         const SDFilter::MeshDenoisingParameters &param,
+                         bool show_progress = true,
+                         const std::string &indent = "")
 {
 	TriMesh mesh;
 	bool load_success = false;
@@ -740,26 +843,52 @@ bool process_single_mesh(const std::string &input_mesh_path,
 	std::string error;
 
 	// Load mesh based on file extension
-	if(has_extension(input_mesh_path, ".gltf") || has_extension(input_mesh_path, ".glb")){
-		load_success = load_gltf_mesh(input_mesh_path, mesh, warning, error);
-	}
-	else if(has_extension(input_mesh_path, ".usd") || has_extension(input_mesh_path, ".usda") ||
-	        has_extension(input_mesh_path, ".usdc") || has_extension(input_mesh_path, ".usdz")){
-		load_success = load_usd_mesh(input_mesh_path, mesh, warning, error);
+	if(show_progress){
+		ProgressIndicator progress(indent + "Loading mesh");
+		if(has_extension(input_mesh_path, ".gltf") || has_extension(input_mesh_path, ".glb")){
+			load_success = load_gltf_mesh(input_mesh_path, mesh, warning, error);
+		}
+		else if(has_extension(input_mesh_path, ".usd") || has_extension(input_mesh_path, ".usda") ||
+		        has_extension(input_mesh_path, ".usdc") || has_extension(input_mesh_path, ".usdz")){
+			load_success = load_usd_mesh(input_mesh_path, mesh, warning, error);
+		}
+		else{
+			load_success = OpenMesh::IO::read_mesh(mesh, input_mesh_path);
+			if(!load_success){
+				error = "unable to read input mesh with OpenMesh";
+			}
+		}
+		if(load_success){
+			std::ostringstream oss;
+			oss << indent << "Loaded mesh (" << mesh.n_vertices() << " vertices, " << mesh.n_faces() << " faces)";
+			progress.finish(oss.str());
+		}
+		else{
+			progress.finish(indent + "Loading failed");
+		}
 	}
 	else{
-		load_success = OpenMesh::IO::read_mesh(mesh, input_mesh_path);
-		if(!load_success){
-			error = "unable to read input mesh with OpenMesh";
+		if(has_extension(input_mesh_path, ".gltf") || has_extension(input_mesh_path, ".glb")){
+			load_success = load_gltf_mesh(input_mesh_path, mesh, warning, error);
+		}
+		else if(has_extension(input_mesh_path, ".usd") || has_extension(input_mesh_path, ".usda") ||
+		        has_extension(input_mesh_path, ".usdc") || has_extension(input_mesh_path, ".usdz")){
+			load_success = load_usd_mesh(input_mesh_path, mesh, warning, error);
+		}
+		else{
+			load_success = OpenMesh::IO::read_mesh(mesh, input_mesh_path);
+			if(!load_success){
+				error = "unable to read input mesh with OpenMesh";
+			}
 		}
 	}
 
 	if(!warning.empty()){
-		std::cout << "  Warning: " << warning << std::endl;
+		std::cout << indent << "Warning: " << warning << std::endl;
 	}
 
 	if(!load_success){
-		std::cerr << "  Error: " << error << std::endl;
+		std::cerr << indent << "Error: " << error << std::endl;
 		return false;
 	}
 
@@ -769,19 +898,25 @@ bool process_single_mesh(const std::string &input_mesh_path,
 	SDFilter::normalize_mesh(mesh, original_center, original_scale);
 
 	// Filter the normals and construct the output mesh
-	SDFilter::MeshNormalDenoising denoiser(mesh);
-	TriMesh output_mesh;
-	if(!denoiser.denoise(param, output_mesh)){
-		std::cerr << "  Error: denoising failed" << std::endl;
-		return false;
-	}
+	{
+		ProgressIndicator progress(indent + "Denoising mesh", show_progress);
+		SDFilter::MeshNormalDenoising denoiser(mesh);
+		TriMesh output_mesh;
+		if(!denoiser.denoise(param, output_mesh)){
+			progress.finish(indent + "Denoising failed");
+			std::cerr << indent << "Error: denoising failed" << std::endl;
+			return false;
+		}
+		SDFilter::restore_mesh(output_mesh, original_center, original_scale);
 
-	SDFilter::restore_mesh(output_mesh, original_center, original_scale);
-
-	// Save output mesh
-	if(!SDFilter::write_mesh_high_accuracy(output_mesh, output_mesh_path)){
-		std::cerr << "  Error: unable to save result mesh to " << output_mesh_path << std::endl;
-		return false;
+		// Save output mesh
+		progress.set_message(indent + "Saving mesh");
+		if(!SDFilter::write_mesh_high_accuracy(output_mesh, output_mesh_path)){
+			progress.finish(indent + "Saving failed");
+			std::cerr << indent << "Error: unable to save result mesh to " << output_mesh_path << std::endl;
+			return false;
+		}
+		progress.finish(indent + "Complete");
 	}
 
 	return true;
@@ -829,6 +964,7 @@ int process_batch(const std::string &option_file,
 
 	int success_count = 0;
 	int failure_count = 0;
+	auto batch_start = std::chrono::steady_clock::now();
 
 	// Process each file
 	for(size_t i = 0; i < mesh_files.size(); ++i){
@@ -836,25 +972,31 @@ int process_batch(const std::string &option_file,
 		std::string input_path = join_path(input_dir, filename);
 		std::string output_path = join_path(output_dir, filename);
 
-		std::cout << "[" << (i + 1) << "/" << mesh_files.size() << "] Processing: " << filename << std::endl;
+		std::cout << "[" << (i + 1) << "/" << mesh_files.size() << "] " << filename << std::endl;
 
-		if(process_single_mesh(input_path, output_path, param)){
-			std::cout << "  Success!" << std::endl;
+		if(process_single_mesh(input_path, output_path, param, true, "  ")){
 			++success_count;
 		}
 		else{
-			std::cout << "  Failed!" << std::endl;
 			++failure_count;
 		}
 		std::cout << std::endl;
 	}
 
-	// Summary
+	// Summary with total elapsed time
+	auto batch_end = std::chrono::steady_clock::now();
+	auto total_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(batch_end - batch_start).count();
+
 	std::cout << "==================================" << std::endl;
 	std::cout << "Batch processing complete" << std::endl;
 	std::cout << "  Successful: " << success_count << std::endl;
 	std::cout << "  Failed:     " << failure_count << std::endl;
 	std::cout << "  Total:      " << mesh_files.size() << std::endl;
+	std::cout << "  Time:       " << std::fixed << std::setprecision(2) << (total_elapsed / 1000.0) << "s";
+	if(success_count > 0){
+		std::cout << " (avg: " << std::fixed << std::setprecision(2) << (total_elapsed / 1000.0 / success_count) << "s per file)";
+	}
+	std::cout << std::endl;
 
 	return failure_count > 0 ? 1 : 0;
 }
