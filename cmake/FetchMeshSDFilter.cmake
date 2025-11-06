@@ -25,12 +25,11 @@ if(NOT alicevision_src_POPULATED)
   FetchContent_Populate(alicevision_src)
 endif()
 
-set(_OPENMESH_URL "https://www.graphics.rwth-aachen.de/media/openmesh_static/Releases/10.0/OpenMesh-10.0.0.tar.bz2")
+set(_OPENMESH_URL "https://www.graphics.rwth-aachen.de/media/openmesh_static/Releases/11.0/OpenMesh-11.0.0.tar.gz")
 FetchContent_Declare(
   openmesh
   URL "${_OPENMESH_URL}"
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-  URL_HASH SHA256=af22520a474bb6a3b355eb0867449c6b995126f97632d1ee5ff9c7ebd322fedb
 )
 FetchContent_GetProperties(openmesh)
 if(NOT openmesh_POPULATED)
@@ -56,6 +55,23 @@ if(NOT tinygltf_POPULATED)
   FetchContent_Populate(tinygltf)
 endif()
 
+set(_TINYUSDZ_URL "https://github.com/lighttransport/tinyusdz/archive/refs/heads/release.zip")
+
+# TinyUSDZ build options must be set BEFORE FetchContent
+set(TINYUSDZ_PRODUCTION_BUILD ON CACHE BOOL "" FORCE)
+set(TINYUSDZ_WITH_OPENSUBDIV OFF CACHE BOOL "" FORCE)
+set(TINYUSDZ_WITH_AUDIO OFF CACHE BOOL "" FORCE)
+set(TINYUSDZ_WITH_EXR OFF CACHE BOOL "" FORCE)
+set(TINYUSDZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(TINYUSDZ_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  tinyusdz
+  URL "${_TINYUSDZ_URL}"
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(tinyusdz)
+
 set(MESHSD_DIR "${alicevision_src_SOURCE_DIR}/src/dependencies/MeshSDFilter")
 
 if(NOT EXISTS "${MESHSD_DIR}/CMakeLists.txt")
@@ -73,10 +89,16 @@ if(EXISTS "${_override_dir}")
   endforeach()
 endif()
 
+# Add include directories globally before building MeshSDFilter
+# This ensures tinygltf and tinyusdz headers are available during compilation
+include_directories("${tinygltf_SOURCE_DIR}")
+include_directories("${tinyusdz_SOURCE_DIR}/src")
+
 add_subdirectory("${MESHSD_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/MeshSDFilter-build")
 
+# Link tinyusdz to the targets after they're created
 foreach(_mesh_target MeshSDFilter MeshDenoiser)
   if(TARGET ${_mesh_target})
-    target_include_directories(${_mesh_target} PRIVATE "${tinygltf_SOURCE_DIR}")
+    target_link_libraries(${_mesh_target} tinyusdz_static)
   endif()
 endforeach()
