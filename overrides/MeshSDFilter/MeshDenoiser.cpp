@@ -47,22 +47,15 @@
 #include <vector>
 
 // Filesystem support
-#if __cplusplus >= 201703L
+// Note: MSVC's std::experimental::filesystem has incomplete API, so we use native Windows API for MSVC
+#if __cplusplus >= 201703L && !defined(_MSC_VER)
 	#include <filesystem>
 	namespace fs = std::filesystem;
 	#define HAS_FILESYSTEM
-#elif defined(_MSC_VER) && _MSC_VER >= 1900
-	#include <filesystem>
-	namespace fs = std::experimental::filesystem;
-	#define HAS_FILESYSTEM
-#elif defined(__has_include)
+#elif defined(__has_include) && !defined(_MSC_VER)
 	#if __has_include(<filesystem>)
 		#include <filesystem>
 		namespace fs = std::filesystem;
-		#define HAS_FILESYSTEM
-	#elif __has_include(<experimental/filesystem>)
-		#include <filesystem>
-		namespace fs = std::experimental::filesystem;
 		#define HAS_FILESYSTEM
 	#endif
 #endif
