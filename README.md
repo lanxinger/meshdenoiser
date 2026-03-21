@@ -1,163 +1,128 @@
-# meshdenoiser
+# MeshDenoiser
 
-A tiny, cross‑platform CMake repo that **uses the MeshSDFilter code from AliceVision** at commit
-`14b0b8f8b3026765d165dfc3f219ed8c53635f52` and builds the two binaries:
+A cross-platform mesh normal denoising tool based on the **Static/Dynamic Filtering** algorithm
+([Zhang et al., arXiv:1712.03574](https://arxiv.org/abs/1712.03574)).
 
-- `MeshSDFilter`
-- `MeshDenoiser`
+Smooths noisy 3D meshes while preserving geometric detail — useful for cleaning up
+photogrammetry output, 3D scans, and other noisy mesh data.
 
-Dependencies are handled per‑platform (OpenMesh sources are bundled by the upstream code; Eigen is installed by the workflow/package manager).
+## Features
+
+- **Multi-format input:** OBJ, PLY, OFF, STL, glTF (.gltf/.glb), USD (.usd/.usda/.usdc/.usdz)
+- **Multi-format output:** Any format supported by OpenMesh (OBJ, PLY, OFF, STL, etc.)
+- **Flexible CLI:** Run with built-in defaults or a custom options file
+- **Pipeline timing** printed to stdout; optional JSON/CSV metrics export
+- **Deterministic mode** for reproducible results
+- **Optional CHOLMOD** solver backend (auto-detected, falls back to Eigen LDLT)
+- **OpenMP** parallelization (optional)
+- **Input validation** — rejects meshes with NaN/Inf coordinates
+
+## Quick Start
+
+```bash
+# Denoise with built-in defaults
+MeshDenoiser input.obj output.obj
+
+# With a custom options file
+MeshDenoiser options.txt input.obj output.obj
+
+# Denoise a glTF or USD file
+MeshDenoiser scan.glb denoised.obj
+MeshDenoiser scene.usdz clean.ply
+
+# Generate a default options template
+MeshDenoiser --write-default-options my_options.txt
+
+# Show all options
+MeshDenoiser --help
+```
+
+### Optional flags
+
+| Flag | Description |
+|------|-------------|
+| `--export-precision N` | Vertex coordinate precision for output (default: 16) |
+| `--metrics-json PATH` | Write JSON timing and solver metrics |
+| `--metrics-csv PATH` | Append CSV timing and solver metrics |
+| `--deterministic` | Force single-threaded execution for reproducible output |
+| `--write-default-options PATH` | Write the default options template to a file and exit |
+
+## Denoising Parameters
+
+The defaults are tuned for detail-preserving cleanup. Generate a commented template with
+`MeshDenoiser --write-default-options options.txt`, or see `MeshDenoiserDefaults.txt`.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `Lambda` | 0.15 | Regularization weight. Higher = more smoothing per iteration |
+| `Eta` | 2.2 | Spatial Gaussian sigma, scaled by average face-centroid distance |
+| `Mu` | 0.2 | Guidance normal difference weight |
+| `Nu` | 0.25 | Signal normal difference weight |
+| `MeshUpdateClosenessWeight` | 0.001 | Vertex position fidelity during mesh update |
+| `MeshUpdateIterations` | 20 | Max iterations for mesh vertex update per outer iteration |
+| `MeshUpdateDisplacementEps` | 0.1 | Early-stop threshold for mesh update RMS displacement (<=0 disables) |
+| `OuterIterations` | 1 | Number of full filtering passes. More = more smoothing |
+| `DeterministicMode` | 0 | Force single-threaded execution (0/1) |
+| `LinearSolverType` | 1 | 0=CG, 1=Eigen LDLT, 2=CHOLMOD (falls back to 1 if unavailable) |
 
 ## Dependencies
 
-MeshSDFilter requires:
-- **Eigen 3.3+** (header-only)
-- **OpenMP** (optional, if compiler supports it)
-- **OpenMesh 11.0** – fetched and built automatically from source
-- **tinygltf** v2.9.6 (header-only, fetched automatically) to allow loading `.gltf` and `.glb` meshes when running `MeshDenoiser`
-- **tinyusdz** (fetched automatically) to allow loading USD formats (`.usd`, `.usda`, `.usdc`, `.usdz`) when running `MeshDenoiser`
+| Library | Version | Type | Notes |
+|---------|---------|------|-------|
+| **Eigen** | 3.3+ | Header-only | Must be findable via `find_package(Eigen3)` or `-DEIGEN3_INCLUDE_DIR=...` |
+| **OpenMesh** | 11.0 | Fetched automatically | Mesh data structure and traditional format I/O |
+| **tinygltf** | 2.9.7 | Fetched automatically | Header-only glTF 2.0 parser |
+| **tinyusdz** | 0.9.1 | Fetched automatically | USD format support |
+| **OpenMP** | — | Optional | Multi-threaded performance (auto-detected) |
+| **SuiteSparse CHOLMOD** | — | Optional | Faster sparse solver (auto-detected, falls back to Eigen LDLT) |
 
-OpenMP is an open standard for shared-memory parallelism; compilers that support it (e.g. GCC, Clang with `libomp`, MSVC) let MeshSDFilter run heavy loops across multiple CPU cores.
-
-> Note: MeshSDFilter expects Eigen to be discoverable via `find_package(Eigen3)`. Our CI installs Eigen per-platform so you don't have to.
-> You can also point CMake at a local Eigen install with `-DEIGEN3_INCLUDE_DIR=/path/to/eigen` if needed.
-
-## Build (local)
+## Build
 
 ### Linux (Ubuntu/Debian)
 ```bash
 sudo apt-get update && sudo apt-get install -y build-essential cmake libeigen3-dev
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/MeshSDFilter --help
 ./build/MeshDenoiser --help
 ```
 
 ### macOS
-Using Homebrew:
 ```bash
 brew update && brew install cmake eigen
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/MeshSDFilter --help
 ./build/MeshDenoiser --help
 ```
-If you want OpenMP on macOS, install `gcc` and configure CMake with `-DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14` (or the version you installed).
+
+For OpenMP on macOS, install `gcc` and configure with `-DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14`.
 
 ### Windows (MSVC + vcpkg)
 ```powershell
-# One-time: install vcpkg and integrate
-# https://github.com/microsoft/vcpkg#quick-start-windows
 vcpkg install eigen3
-
-# Configure with vcpkg toolchain so find_package(Eigen3) works
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="C:/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake"
 cmake --build build --config Release
-# Binaries will be under build/Release/
 ```
 
+## Input Format Notes
+
+- For **glTF** and **USD** files with multiple meshes or transforms, all geometry is combined and transforms are applied automatically before filtering.
+- Output format is determined by file extension (e.g., `.obj`, `.ply`, `.stl`).
+
 ## CI / Pre-built Binaries
-- GitHub Actions build and upload artifacts for Ubuntu, macOS, Windows.
-- Artifacts include the two binaries per platform (`MeshSDFilter`, `MeshDenoiser`).
-- Download the latest release binaries from the [Releases page](../../releases).
+
+GitHub Actions builds and uploads artifacts for Ubuntu, macOS, and Windows.
+Download from the [Releases page](../../releases).
 
 ### macOS Security Note
-When running downloaded binaries on macOS, you may see a security warning. To fix this:
 
-**Option 1 - Right-click method (Recommended):**
-1. Right-click (or Control+click) on `MeshDenoiser` or `MeshSDFilter`
-2. Select "Open" from the menu
-3. Click "Open" in the security dialog
-4. After doing this once, you can run the binary normally from Terminal
-
-**Option 2 - Command line:**
+Downloaded binaries may be quarantined. To fix:
 ```bash
-# Remove quarantine attribute from all files in the download
 xattr -cr meshdenoiser-macos/
 ```
 
-**Option 3 - System Settings:**
-1. Try to run the binary (it will be blocked)
-2. Go to System Settings → Privacy & Security
-3. Scroll down and click "Open Anyway" next to the blocked app message
-
 ## Licensing
-- **MeshSDFilter** code is BSD-3-Clause (see `LICENSES/MeshSDFilter-BSD-3-Clause.txt`).
-- **OpenMesh** license is included as `LICENSES/OpenMesh-LICENSE.txt`.
-- This wrapper repo is MIT by default (you can change it), and preserves upstream notices.
 
-## Using the tools
-
-### Single File Processing
-```bash
-# Filter
-MeshSDFilter FilteringOptions.txt input_mesh.ply output_mesh.ply
-# Denoise
-MeshDenoiser DenoisingOptions.txt input_mesh.ply output_mesh.ply
-```
-
-### Batch Processing
-Process multiple mesh files at once by providing directories instead of individual files:
-
-```bash
-# Process all mesh files in input_dir/ and save to output_dir/
-MeshDenoiser DenoisingOptions.txt input_dir/ output_dir/
-```
-
-Batch processing features:
-- **Automatically discovers** all supported mesh files in the input directory
-- **Preserves filenames** - each output file has the same name as its input
-- **Creates output directory** if it doesn't exist
-- **Progress indicators** - animated spinner showing loading, denoising, and saving progress
-- **Real-time feedback** - displays mesh statistics (vertices, faces) and elapsed time
-- **Error handling** - continues processing remaining files if one fails
-- **Summary report** - displays success/failure counts and average processing time
-
-Example:
-```bash
-# Process a directory of scanned meshes
-MeshDenoiser MeshDenoiserDefaults.txt scanned_meshes/ cleaned_meshes/
-```
-
-Output example:
-```
-Batch processing mode
-Input directory:  scanned_meshes/
-Output directory: cleaned_meshes/
-
-Found 3 mesh file(s) to process
-
-[1/3] scan001.obj
-  Loaded mesh (12543 vertices, 25086 faces) (0.12s)
-  Complete (2.45s)
-
-[2/3] scan002.ply
-  Loaded mesh (8421 vertices, 16842 faces) (0.08s)
-  Complete (1.89s)
-
-[3/3] model.gltf
-  Loaded mesh (15632 vertices, 31264 faces) (0.15s)
-  Complete (3.12s)
-
-==================================
-Batch processing complete
-  Successful: 3
-  Failed:     0
-  Total:      3
-  Time:       7.56s (avg: 2.52s per file)
-```
-
-The progress indicator shows:
-- **Loading phase**: Spinner animation with vertex/face count on completion
-- **Denoising phase**: Spinner animation with elapsed time
-- **Saving phase**: Quick spinner during file write
-- Terminal animation works in interactive shells; falls back to simple dots in pipes/logs
-
-### Supported Formats
-- A detail-preserving MeshDenoiser preset is in `MeshDenoiserDefaults.txt` (outer iterations 1, lambda 0.15, eta 2.2, mu 0.2, nu 0.25). Copy it to your working folder or pass it directly; raise lambda/eta or the iteration count only if you want stronger smoothing.
-- `MeshDenoiser` accepts:
-  - Traditional formats: OBJ, PLY, OFF, STL (via OpenMesh)
-  - glTF formats: `.gltf`, `.glb` (via tinygltf)
-  - USD formats: `.usd`, `.usda`, `.usdc`, `.usdz` (via tinyusdz)
-
-  For glTF and USD files with multiple meshes or transforms, all geometry is combined and transforms are applied automatically before filtering.
+- **MeshSDFilter algorithm** is BSD-3-Clause (see `LICENSES/MeshSDFilter-BSD-3-Clause.txt`).
+- **OpenMesh** license: `LICENSES/OpenMesh-LICENSE.txt`.
+- **tinygltf** license: `LICENSES/tinygltf-LICENSE.txt`.
+- This project is licensed under the Mozilla Public License v2.0.

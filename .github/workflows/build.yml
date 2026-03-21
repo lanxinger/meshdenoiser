@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -68,11 +68,9 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p artifacts
-          find build -name MeshSDFilter -type f -exec cp {} artifacts/ \;
           find build -name MeshDenoiser -type f -exec cp {} artifacts/ \;
           cp MeshDenoiserDefaults.txt artifacts/
           cp README.md artifacts/
-          chmod +x artifacts/MeshSDFilter
           chmod +x artifacts/MeshDenoiser
 
           # Bundle OpenMesh libraries and fix rpath
@@ -80,22 +78,16 @@ jobs:
             mkdir -p artifacts/lib
             find build -name "libOpenMesh*.dylib" -exec cp {} artifacts/lib/ \;
 
-            # Fix rpath for both executables
-            for exe in artifacts/MeshSDFilter artifacts/MeshDenoiser; do
+            for exe in artifacts/MeshDenoiser; do
               if [ -f "$exe" ]; then
-                # Get list of OpenMesh libraries this executable depends on
                 otool -L "$exe" | grep libOpenMesh | awk '{print $1}' | while read lib; do
                   libname=$(basename "$lib")
-                  # Change the rpath to look in the lib directory next to the executable
                   install_name_tool -change "$lib" "@executable_path/lib/$libname" "$exe"
                 done
-
-                # Ad-hoc code sign to avoid some security warnings
                 codesign --force --deep --sign - "$exe"
               fi
             done
 
-            # Also sign the libraries
             for lib in artifacts/lib/*.dylib; do
               if [ -f "$lib" ]; then
                 codesign --force --sign - "$lib"
@@ -105,8 +97,7 @@ jobs:
             mkdir -p artifacts/lib
             find build -name "libOpenMesh*.so*" -exec cp {} artifacts/lib/ \;
 
-            # Set rpath for both executables to look in lib directory
-            for exe in artifacts/MeshSDFilter artifacts/MeshDenoiser; do
+            for exe in artifacts/MeshDenoiser; do
               if [ -f "$exe" ]; then
                 patchelf --set-rpath '$ORIGIN/lib' "$exe" || true
               fi
@@ -117,13 +108,12 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           mkdir artifacts
-          Get-ChildItem -Path build -Recurse -Filter MeshSDFilter.exe | ForEach-Object { Copy-Item $_.FullName -Destination artifacts\ }
           Get-ChildItem -Path build -Recurse -Filter MeshDenoiser.exe | ForEach-Object { Copy-Item $_.FullName -Destination artifacts\ }
           copy MeshDenoiserDefaults.txt artifacts\
           copy README.md artifacts\
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact_name }}
           path: artifacts/
@@ -143,14 +133,14 @@ jobs:
 
       - name: Upload to release (Linux/macOS)
         if: github.event_name == 'release' && runner.os != 'Windows'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.artifact_name }}.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to release (Windows)
         if: github.event_name == 'release' && runner.os == 'Windows'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.artifact_name }}.zip
           token: ${{ secrets.GITHUB_TOKEN }}
