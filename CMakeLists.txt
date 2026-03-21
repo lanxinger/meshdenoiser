@@ -16,14 +16,30 @@ if(ENABLE_OPENMP)
   find_package(OpenMP QUIET)
 endif()
 
-# Eigen (required)
+# Eigen (required, header-only)
 find_package(Eigen3 3.3 QUIET)
 if(NOT TARGET Eigen3::Eigen)
-  message(STATUS "Eigen3 not found via find_package, trying EIGEN3_INCLUDE_DIR")
+  # Retry without version constraint
+  find_package(Eigen3 QUIET)
+endif()
+if(NOT TARGET Eigen3::Eigen)
+  # Try user-provided include dir
   if(DEFINED EIGEN3_INCLUDE_DIR AND EXISTS "${EIGEN3_INCLUDE_DIR}")
+    set(_eigen_dir "${EIGEN3_INCLUDE_DIR}")
+  else()
+    # Probe common system locations
+    find_path(_eigen_dir NAMES Eigen/Dense
+      PATHS /usr/include/eigen3 /usr/local/include/eigen3 /opt/homebrew/include/eigen3
+      NO_DEFAULT_PATH)
+    if(NOT _eigen_dir)
+      find_path(_eigen_dir NAMES Eigen/Dense)
+    endif()
+  endif()
+  if(_eigen_dir)
+    message(STATUS "Using Eigen from ${_eigen_dir}")
     add_library(Eigen3::Eigen INTERFACE IMPORTED)
     set_target_properties(Eigen3::Eigen PROPERTIES
-      INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
+      INTERFACE_INCLUDE_DIRECTORIES "${_eigen_dir}")
   else()
     message(FATAL_ERROR "Eigen3 not found. Install via system package manager or set -DEIGEN3_INCLUDE_DIR=...")
   endif()
