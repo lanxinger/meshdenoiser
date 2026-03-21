@@ -1,11 +1,34 @@
 # Default options for MeshDenoiser tuned for detail-preserving cleanup.
 #
-# Reduce OuterIterations or Lambda for even lighter touch; raise them (or Eta) if you need more smoothing.
+# Reduce OuterIterations or Lambda for even lighter touch;
+# raise them (or Eta) if you need more smoothing.
 
+## Regularization weight. Higher = more smoothing per iteration.
 Lambda 0.15
+
+## Spatial Gaussian sigma, scaled by average face-centroid distance.
 Eta 2.2
+
+## Guidance normal difference weight.
 Mu 0.2
+
+## Signal normal difference weight.
 Nu 0.25
+
+## Closeness weight for mesh update (vertex position fidelity).
 MeshUpdateClosenessWeight 0.001
+
+## Max iterations for mesh vertex update per outer iteration.
 MeshUpdateIterations 20
+
+## Early-stop threshold for mesh update RMS displacement (<=0 disables).
+MeshUpdateDisplacementEps 0.1
+
+## Number of full filtering passes.
 OuterIterations 1
+
+## Force single-threaded execution for reproducible output (0/1).
+DeterministicMode 0
+
+## Linear solver backend: 0=CG, 1=Eigen LDLT, 2=CHOLMOD (falls back to 1 if unavailable).
+LinearSolverType 1
