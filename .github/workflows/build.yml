@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -113,7 +113,7 @@ jobs:
           copy README.md artifacts\
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact_name }}
           path: artifacts/
@@ -133,14 +133,14 @@ jobs:
 
       - name: Upload to release (Linux/macOS)
         if: github.event_name == 'release' && runner.os != 'Windows'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.artifact_name }}.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to release (Windows)
         if: github.event_name == 'release' && runner.os == 'Windows'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.artifact_name }}.zip
           token: ${{ secrets.GITHUB_TOKEN }}
