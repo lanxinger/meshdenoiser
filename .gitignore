@@ -31,3 +31,7 @@ Makefile
 
 # macOS
 .DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
