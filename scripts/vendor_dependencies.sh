@@ -34,11 +34,10 @@ mkdir -p "$DEST/include/OpenMesh/Core" "$DEST/Core"
   cp "$f" "$DEST/include/OpenMesh/Core/$f"
 done)
 
-# Sources (tree preserved) -> Core/...
-(cd "$OM_CORE" && find . -name '*.cc' -print | while read -r f; do
-  mkdir -p "$DEST/Core/$(dirname "$f")"
-  cp "$f" "$DEST/Core/$f"
-done)
+# Full tree (sources + headers) -> Core/...
+# Headers are duplicated here so OpenMesh's quoted relative includes
+# (e.g. #include "PropertyCreator.hh") resolve next to their .cc files.
+cp -R "$OM_CORE/." "$DEST/Core/"
 
 # License texts ship with the vendored code (App Store / attribution requirement)
 cp "$ROOT/LICENSES/OpenMesh-LICENSE.txt" "$DEST/LICENSE.txt"
