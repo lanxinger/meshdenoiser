@@ -25,13 +25,15 @@ tar -xzf "$TMP/openmesh.tar.gz" -C "$TMP"
 OM_DIR="$(echo "$TMP"/OpenMesh-*)"
 OM_CORE="$OM_DIR/src/OpenMesh/Core"
 DEST="$ROOT/Sources/OpenMeshCore"
-rm -rf "$DEST/include" "$DEST/Core"
-mkdir -p "$DEST/include/OpenMesh/Core" "$DEST/Core"
+rm -rf "$DEST/Headers" "$DEST/Core"
+mkdir -p "$DEST/Headers/OpenMesh/Core" "$DEST/Core"
 
-# Headers (tree preserved) -> include/OpenMesh/Core/...
+# Headers (tree preserved) -> Headers/OpenMesh/Core/...
+# NOTE: "Headers", not SPM's default public-headers dir "include" — these must
+# remain textual includes, never a Clang module (see Package.swift comment).
 (cd "$OM_CORE" && find . \( -name '*.hh' -o -name '*.h' \) -print | while read -r f; do
-  mkdir -p "$DEST/include/OpenMesh/Core/$(dirname "$f")"
-  cp "$f" "$DEST/include/OpenMesh/Core/$f"
+  mkdir -p "$DEST/Headers/OpenMesh/Core/$(dirname "$f")"
+  cp "$f" "$DEST/Headers/OpenMesh/Core/$f"
 done)
 
 # Full tree (sources + headers) -> Core/...

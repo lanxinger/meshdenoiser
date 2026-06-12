@@ -8,12 +8,16 @@ let package = Package(
         .library(name: "MeshDenoiserKit", targets: ["MeshDenoiserKit"]),
     ],
     targets: [
+        // OpenMesh headers deliberately live in "Headers", not the SPM default
+        // "include": they must stay textual includes, not a Clang module —
+        // some of them #include each other inside open namespaces, which
+        // breaks when clang maps the #include to a module import.
         .target(
             name: "OpenMeshCore",
             path: "Sources/OpenMeshCore",
-            publicHeadersPath: "include",
             cxxSettings: [
                 .define("OM_STATIC_BUILD"),
+                .headerSearchPath("Headers"),
             ]
         ),
         .target(
@@ -24,6 +28,7 @@ let package = Package(
             cxxSettings: [
                 .headerSearchPath("../../src"),
                 .headerSearchPath("../../Vendor/eigen"),
+                .headerSearchPath("../OpenMeshCore/Headers"),
             ]
         ),
         .target(
