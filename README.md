@@ -47,6 +47,34 @@ MeshDenoiser --help
 | `--deterministic` | Force single-threaded execution for reproducible output |
 | `--write-default-options PATH` | Write the default options template to a file and exit |
 
+## Using from Swift (iOS / macOS)
+
+This repo is also a Swift Package (`MeshDenoiserKit`) targeting iOS 17+ / macOS 14+.
+It exposes the denoiser as a buffers-in/buffers-out API — file I/O stays in your app
+(ModelIO/SceneKit read USDZ natively). Vertex count and order are preserved, so UVs
+and materials on the original asset remain valid; recompute normals after denoising.
+
+```swift
+import MeshDenoiserKit
+
+var params = MeshDenoiseParameters()        // tuned defaults
+params.outerIterations = 2                  // more smoothing
+
+let denoised = try await MeshDenoiser.denoise(
+    positions: positions,                   // [SIMD3<Float>]
+    indices: indices,                       // [UInt32], 3 per triangle
+    parameters: params
+) { progress in
+    print("Progress: \(progress)")
+}
+```
+
+Cancellation: cancel the surrounding `Task`; the call throws `CancellationError`
+(checked after each outer iteration). For very large meshes (>~500k vertices) set
+`params.linearSolver = .conjugateGradient` to reduce memory use.
+
+Vendored dependencies (Eigen, OpenMesh Core) are pinned by `scripts/vendor_dependencies.sh`.
+
 ## Denoising Parameters
 
 The defaults are tuned for detail-preserving cleanup. Generate a commented template with
