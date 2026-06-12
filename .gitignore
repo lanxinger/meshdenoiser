@@ -28,6 +28,12 @@ Makefile
 # Object files
 *.o
 *.obj
+# ...but Wavefront OBJ test fixtures are not object files
+!Tests/MeshDenoiserKitTests/Fixtures/*.obj
 
 # macOS
 .DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
