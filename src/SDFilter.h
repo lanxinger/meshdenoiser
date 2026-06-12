@@ -396,6 +396,11 @@ public:
 		return stats_;
 	}
 
+	void set_print_progress(bool print_progress)
+	{
+		print_progress_ = print_progress;
+	}
+
 protected:
 
 	bool filter(Parameters param)

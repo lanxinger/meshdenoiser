@@ -864,6 +864,7 @@ int main(int argc, char **argv)
 
 	// Filter the normals and construct the output mesh
 	SDFilter::MeshNormalDenoising denoiser(mesh);
+	denoiser.set_print_progress(true);
 	TriMesh output_mesh;
 	auto denoise_begin = Clock::now();
 	if(!denoiser.denoise(param, output_mesh)){

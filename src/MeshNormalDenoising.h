@@ -34,6 +34,7 @@
 
 #include "MeshNormalFilter.h"
 #include <algorithm>
+#include <functional>
 
 
 namespace SDFilter
@@ -91,12 +92,30 @@ public:
 		print_error_evaluation_ = false;
 	}
 
+	// Called after each completed outer iteration with (completed, total).
+	// Return false to cancel; denoise() then returns false and cancelled() reports true.
+	typedef std::function<bool(int, int)> ProgressCallback;
+
+	void set_progress_callback(ProgressCallback callback)
+	{
+		progress_callback_ = std::move(callback);
+	}
+
+	bool cancelled() const
+	{
+		return cancelled_;
+	}
+
 
 	bool denoise(const MeshDenoisingParameters &param, TriMesh &output_mesh)
 	{
 		assert(param.valid_parameters());
 
-		std::cout << "Denoising started" << std::endl;
+		cancelled_ = false;
+
+		if(print_progress_){
+			std::cout << "Denoising started" << std::endl;
+		}
 
 		Timer timer;
 		Timer::EventID denoise_begin_time = timer.get_time();
@@ -107,7 +126,9 @@ public:
 
 		for(int i = 0; i < param.outer_iterations; ++ i)
 		{
-			std::cout << "Outer iteration " << (i+1) << "..." << std::endl;
+			if(print_progress_){
+				std::cout << "Outer iteration " << (i+1) << "..." << std::endl;
+			}
 
 			if(!filter(param, output_mesh)){
 				std::cerr << "Unable to perform normal filter. Denoising aborted." << std::endl;
@@ -121,6 +142,11 @@ public:
 
 			// Use the filtered mesh as the input mesh for the next outer iteration
 			set_mesh(output_mesh, false);
+
+			if(progress_callback_ && !progress_callback_(i + 1, param.outer_iterations)){
+				cancelled_ = true;
+				return false;
+			}
 		}
 
 		Timer::EventID denoise_end_time = timer.get_time();
@@ -130,12 +156,19 @@ public:
 		stats_.mesh_filter_total_secs = mesh_filter_total_sum;
 		stats_.denoise_total_secs = timer.elapsed_time(denoise_begin_time, denoise_end_time);
 		stats_.outer_iterations = param.outer_iterations;
-		std::cout << "Denoising completed, timing: " <<
-				stats_.denoise_total_secs << std::endl;
+		if(print_progress_){
+			std::cout << "Denoising completed, timing: " <<
+					stats_.denoise_total_secs << std::endl;
+		}
 
 		return true;
 	}
 
+
+private:
+
+	ProgressCallback progress_callback_;
+	bool cancelled_ = false;
 
 protected:
 
