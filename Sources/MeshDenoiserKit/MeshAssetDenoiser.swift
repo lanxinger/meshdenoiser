@@ -44,6 +44,35 @@ public struct MeshAssetDenoiseSummary: Sendable, Equatable {
     }
 }
 
+public struct MeshAssetDenoisePreviewMesh: Sendable, Equatable {
+    public var originalPositions: [SIMD3<Float>]
+    public var denoisedPositions: [SIMD3<Float>]
+    public var indices: [UInt32]
+
+    public init(
+        originalPositions: [SIMD3<Float>],
+        denoisedPositions: [SIMD3<Float>],
+        indices: [UInt32]
+    ) {
+        self.originalPositions = originalPositions
+        self.denoisedPositions = denoisedPositions
+        self.indices = indices
+    }
+}
+
+public struct MeshAssetDenoisePreview: Sendable, Equatable {
+    public var summary: MeshAssetDenoiseSummary
+    public var meshes: [MeshAssetDenoisePreviewMesh]
+
+    public init(
+        summary: MeshAssetDenoiseSummary,
+        meshes: [MeshAssetDenoisePreviewMesh]
+    ) {
+        self.summary = summary
+        self.meshes = meshes
+    }
+}
+
 public enum MeshAssetDenoiseError: LocalizedError, Sendable, Equatable {
     case unsupportedAsset(String)
     case preprocessingWouldChangeTopology
@@ -126,6 +155,86 @@ public enum MeshAssetDenoiser {
             throw MeshAssetDenoiseError.unsupportedAsset("Asset contains no triangle mesh data.")
         }
         return summary
+    }
+
+    /// Denoises all ModelIO meshes in an asset and returns geometry buffers for
+    /// fast preview without writing or mutating the source asset.
+    public static func preview(
+        inputURL: URL,
+        options: MeshAssetDenoiseOptions = MeshAssetDenoiseOptions(),
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> MeshAssetDenoisePreview {
+        try await preview(
+            asset: MDLAsset(url: inputURL),
+            options: options,
+            progress: progress
+        )
+    }
+
+    /// Denoises all ModelIO meshes in an already loaded asset and returns
+    /// geometry buffers for fast preview without writing or mutating the asset.
+    public static func preview(
+        asset: MDLAsset,
+        options: MeshAssetDenoiseOptions = MeshAssetDenoiseOptions(),
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> MeshAssetDenoisePreview {
+        guard options.parameters.isValid else {
+            throw MeshDenoiseError.invalidParameters
+        }
+
+        let meshes = asset.childObjects(of: MDLMesh.self).compactMap { $0 as? MDLMesh }
+        guard !meshes.isEmpty else {
+            throw MeshAssetDenoiseError.unsupportedAsset("Asset contains no ModelIO meshes.")
+        }
+
+        progress?(0)
+
+        var summary = MeshAssetDenoiseSummary(meshesProcessed: 0, verticesProcessed: 0, facesProcessed: 0)
+        var previewMeshes = [MeshAssetDenoisePreviewMesh]()
+        previewMeshes.reserveCapacity(meshes.count)
+
+        for (meshIndex, mesh) in meshes.enumerated() {
+            let positions = try loadPositions(from: mesh)
+            let indices = try loadTriangleIndices(from: mesh)
+            guard !positions.isEmpty, !indices.isEmpty else {
+                continue
+            }
+
+            let diagnostics = try validatePreprocessingIfNeeded(
+                positions: positions,
+                indices: indices,
+                options: options.preprocessing
+            )
+            if let diagnostics {
+                summary.preprocessingDiagnostics.append(diagnostics)
+            }
+
+            let baseProgress = Double(meshIndex) / Double(meshes.count)
+            let meshProgressScale = 1 / Double(meshes.count)
+            let denoised = try await MeshDenoiser.denoise(
+                positions: positions,
+                indices: indices,
+                parameters: options.parameters
+            ) { meshProgress in
+                progress?(baseProgress + meshProgress * meshProgressScale)
+            }
+
+            previewMeshes.append(MeshAssetDenoisePreviewMesh(
+                originalPositions: positions,
+                denoisedPositions: denoised,
+                indices: indices
+            ))
+            summary.meshesProcessed += 1
+            summary.verticesProcessed += positions.count
+            summary.facesProcessed += indices.count / 3
+            progress?(Double(meshIndex + 1) / Double(meshes.count))
+        }
+
+        guard summary.meshesProcessed > 0 else {
+            throw MeshAssetDenoiseError.unsupportedAsset("Asset contains no triangle mesh data.")
+        }
+        progress?(1)
+        return MeshAssetDenoisePreview(summary: summary, meshes: previewMeshes)
     }
 
     /// Denoises all ModelIO meshes in a USD/USDZ-style asset while preserving

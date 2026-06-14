@@ -4,7 +4,7 @@ import CMeshDenoiserCore
 public struct MeshDenoiseParameters: Sendable, Equatable {
 
     public enum Backend: Sendable, Equatable, CaseIterable {
-        /// Native GPU if a Metal device exists, else native CPU.
+        /// Native CPU by default; use `.nativeGPU` explicitly for benchmarked GPU runs.
         case automatic
         /// Native Metal implementation; throws `.gpuUnavailable` without a Metal device.
         case nativeGPU

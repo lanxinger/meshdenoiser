@@ -93,6 +93,15 @@ let preflight = try MeshAssetDenoiser.preflight(
     options: options
 )
 
+let preview = try await MeshAssetDenoiser.preview(
+    inputURL: inputUSDZ,
+    options: options
+) { progress in
+    print("Preview progress: \(progress)")
+}
+
+let denoisedPositions = preview.meshes[0].denoisedPositions
+
 let summary = try await MeshAssetDenoiser.process(
     inputURL: inputUSDZ,
     outputURL: outputUSDZ,
@@ -109,14 +118,19 @@ let inMemorySummary = try await MeshAssetDenoiser.process(
 )
 ```
 
-`MeshAssetDenoiser` denoises each `MDLMesh` in place and writes a new asset,
-preserving vertex count/order, submeshes, materials, UVs, and transforms. USDZ
-output uses the SceneKit ModelIO bridge because ModelIO can read USDZ but does
-not export it directly. The URL-based `process(inputURL:outputURL:...)` API
-requires distinct input and output URLs so a failed export cannot overwrite the
-source asset. Asset export writes to a temporary sibling file first and replaces
-the final output only after export succeeds. Progress callbacks are monotonic
-and cover `0...1`.
+`MeshAssetDenoiser.preview(...)` denoises each `MDLMesh` and returns original
+positions, denoised positions, and shared triangle indices without writing or
+mutating the source asset. Use it for interactive app previews where exporting
+a full USDZ would make the UI wait on asset packaging.
+
+`MeshAssetDenoiser.process(...)` writes a new denoised asset, preserving vertex
+count/order, submeshes, materials, UVs, and transforms. USDZ output patches the
+USD geometry and repacks the asset because ModelIO can read USDZ but does not
+export it directly. The URL-based `process(inputURL:outputURL:...)` API requires
+distinct input and output URLs so a failed export cannot overwrite the source
+asset. Asset export writes to a temporary sibling file first and replaces the
+final output only after export succeeds. Progress callbacks are monotonic and
+cover `0...1`.
 `preflight(...)` returns the same mesh counts and preprocessing diagnostics
 without denoising or exporting, which is useful for showing validation failures
 before starting the processing step.
@@ -133,7 +147,7 @@ Swift backend selection:
 | `.reference` | Default C++/OpenMesh/Eigen backend; exact golden parity target |
 | `.nativeCPU` | Native Swift pipeline with CPU fixed-point filter and CPU vertex update |
 | `.nativeGPU` | Native Swift pipeline with Metal fixed-point filter; preprocessing and vertex update stay on CPU |
-| `.automatic` | Uses native GPU when Metal is available, otherwise native CPU |
+| `.automatic` | Uses native CPU by default; explicit `.nativeGPU` is available for benchmarked GPU runs |
 
 The native backends are under active parity/performance validation. Keep `.reference`
 as the default for production until benchmark gates and larger fixture coverage pass.

@@ -71,7 +71,12 @@ public enum MeshDenoiser {
         case .nativeGPU where !NativeDenoiser.isGPUAvailable:
             throw MeshDenoiseError.gpuUnavailable
         case .automatic, .nativeGPU, .nativeCPU:
-            let useGPU = parameters.backend != .nativeCPU && NativeDenoiser.isGPUAvailable
+            let resolvedBackend = resolvedNativeBackend(
+                for: parameters.backend,
+                faceCount: indices.count / 3,
+                isGPUAvailable: NativeDenoiser.isGPUAvailable
+            )
+            let useGPU = resolvedBackend == .nativeGPU
             var native = NativeDenoiseParameters()
             native.lambda = parameters.lambda
             native.eta = parameters.eta
@@ -107,6 +112,23 @@ public enum MeshDenoiser {
             } catch NativeDenoiseError.notImplemented {
                 throw MeshDenoiseError.solverFailed
             }
+        }
+    }
+
+    static func resolvedNativeBackend(
+        for backend: MeshDenoiseParameters.Backend,
+        faceCount _: Int,
+        isGPUAvailable _: Bool
+    ) -> MeshDenoiseParameters.Backend {
+        switch backend {
+        case .automatic:
+            return .nativeCPU
+        case .nativeGPU:
+            return .nativeGPU
+        case .nativeCPU:
+            return .nativeCPU
+        case .reference:
+            return .reference
         }
     }
 

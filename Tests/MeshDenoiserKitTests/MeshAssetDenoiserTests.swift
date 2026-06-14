@@ -9,6 +9,34 @@ import XCTest
 
 final class MeshAssetDenoiserTests: XCTestCase {
 
+    func testPreviewReturnsDenoisedGeometryWithoutWritingAsset() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let inputURL = directory.appendingPathComponent("input.usdz")
+        try writeUSDZ(asset: makeBoxAsset(), to: inputURL)
+
+        var parameters = MeshDenoiseParameters()
+        parameters.backend = .nativeCPU
+        let options = MeshAssetDenoiseOptions(parameters: parameters)
+
+        let preview = try await MeshAssetDenoiser.preview(inputURL: inputURL, options: options)
+
+        XCTAssertEqual(preview.summary.meshesProcessed, 1)
+        XCTAssertEqual(preview.meshes.count, 1)
+        XCTAssertEqual(preview.meshes[0].originalPositions.count, preview.meshes[0].denoisedPositions.count)
+        XCTAssertGreaterThan(preview.meshes[0].indices.count, 0)
+        XCTAssertTrue(preview.meshes[0].denoisedPositions.allSatisfy { position in
+            position.x.isFinite && position.y.isFinite && position.z.isFinite
+        })
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted(),
+            ["input.usdz"]
+        )
+    }
+
     func testProcessesUSDAssetAndWritesOutputFile() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

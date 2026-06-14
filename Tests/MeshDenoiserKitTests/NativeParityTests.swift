@@ -5,6 +5,21 @@ import XCTest
 @testable import MeshDenoiserNative
 
 final class NativeParityTests: XCTestCase {
+    func testAutomaticBackendPrefersNativeCPUForPreviewSizedMeshes() {
+        XCTAssertEqual(
+            MeshDenoiser.resolvedNativeBackend(for: .automatic, faceCount: 150_000, isGPUAvailable: true),
+            .nativeCPU
+        )
+        XCTAssertEqual(
+            MeshDenoiser.resolvedNativeBackend(for: .nativeGPU, faceCount: 150_000, isGPUAvailable: true),
+            .nativeGPU
+        )
+        XCTAssertEqual(
+            MeshDenoiser.resolvedNativeBackend(for: .automatic, faceCount: 150_000, isGPUAvailable: false),
+            .nativeCPU
+        )
+    }
+
     func testNativeCPUProducesFiniteMovedOutput() async throws {
         let mesh = DenoiseContractTests.noisyOctahedron()
         var params = MeshDenoiseParameters()
