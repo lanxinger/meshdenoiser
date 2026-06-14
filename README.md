@@ -59,6 +59,7 @@ import MeshDenoiserKit
 
 var params = MeshDenoiseParameters()        // tuned defaults
 params.outerIterations = 2                  // more smoothing
+params.backend = .reference                 // default while native backend matures
 
 let denoised = try await MeshDenoiser.denoise(
     positions: positions,                   // [SIMD3<Float>]
@@ -72,6 +73,157 @@ let denoised = try await MeshDenoiser.denoise(
 Cancellation: cancel the surrounding `Task`; the call throws `CancellationError`
 (checked after each outer iteration). For very large meshes (>~500k vertices) set
 `params.linearSolver = .conjugateGradient` to reduce memory use.
+
+On macOS, app code that works with USD/USDZ assets can use the ModelIO/SceneKit
+adapter directly:
+
+```swift
+import MeshDenoiserKit
+
+var params = MeshDenoiseParameters()
+params.backend = .automatic
+
+let options = MeshAssetDenoiseOptions(
+    parameters: params,
+    preprocessing: .none
+)
+
+let preflight = try MeshAssetDenoiser.preflight(
+    inputURL: inputUSDZ,
+    options: options
+)
+
+let summary = try await MeshAssetDenoiser.process(
+    inputURL: inputUSDZ,
+    outputURL: outputUSDZ,
+    options: options
+) { progress in
+    print("Progress: \(progress)")
+}
+
+// If the app already has an MDLAsset loaded, avoid a second read:
+let inMemorySummary = try await MeshAssetDenoiser.process(
+    asset: modelIOAsset,
+    outputURL: outputUSDZ,
+    options: options
+)
+```
+
+`MeshAssetDenoiser` denoises each `MDLMesh` in place and writes a new asset,
+preserving vertex count/order, submeshes, materials, UVs, and transforms. USDZ
+output uses the SceneKit ModelIO bridge because ModelIO can read USDZ but does
+not export it directly. The URL-based `process(inputURL:outputURL:...)` API
+requires distinct input and output URLs so a failed export cannot overwrite the
+source asset. Asset export writes to a temporary sibling file first and replaces
+the final output only after export succeeds. Progress callbacks are monotonic
+and cover `0...1`.
+`preflight(...)` returns the same mesh counts and preprocessing diagnostics
+without denoising or exporting, which is useful for showing validation failures
+before starting the processing step.
+Topology-changing repair is not applied inside this asset adapter; use
+`.conservativeValidation(...)` only when you want to reject assets that would
+need face/topology changes before denoising. Validation allows unused-vertex
+compaction diagnostics because the adapter keeps the original vertex buffer
+shape and denoises referenced and unreferenced vertices in place.
+
+Swift backend selection:
+
+| Backend | Status |
+|---------|--------|
+| `.reference` | Default C++/OpenMesh/Eigen backend; exact golden parity target |
+| `.nativeCPU` | Native Swift pipeline with CPU fixed-point filter and CPU vertex update |
+| `.nativeGPU` | Native Swift pipeline with Metal fixed-point filter; preprocessing and vertex update stay on CPU |
+| `.automatic` | Uses native GPU when Metal is available, otherwise native CPU |
+
+The native backends are under active parity/performance validation. Keep `.reference`
+as the default for production until benchmark gates and larger fixture coverage pass.
+
+Benchmark Swift backends with:
+
+```bash
+swift run -c release MeshDenoiserBench --faces 81920 --backend all
+```
+
+Use a local USD/USDZ or OBJ file instead of a generated sphere with:
+
+```bash
+swift run -c release MeshDenoiserBench --input path/to/model.usdz --backend all
+```
+
+Exercise the same URL-based asset processing API used by macOS app code with:
+
+```bash
+swift run -c release MeshDenoiserProcess --input path/to/model.usdz --output path/to/denoised.usdz --backend automatic
+swift run -c release MeshDenoiserProcess --input path/to/model.usdz --output path/to/denoised.usdz --backend nativeCPU --repair conservative
+```
+
+`MeshDenoiserProcess` prints `progress=...` lines to stderr and a compact
+`meshes,vertices,faces` CSV summary to stdout after export succeeds.
+
+Run the same benchmark across a folder or manifest of app-exported assets with:
+
+```bash
+swift run -c release MeshDenoiserBench --input-dir path/to/usdz-fixtures --backend all
+swift run -c release MeshDenoiserBench --input-list path/to/fixtures.txt --backend all
+swift run -c release MeshDenoiserBench --input-dir path/to/usdz-fixtures --backend all --keep-going
+swift run -c release MeshDenoiserBench --input-dir path/to/usdz-fixtures --backend all --keep-going --fail-on-error
+swift run -c release MeshDenoiserBench --input-dir path/to/usdz-fixtures --backend all --repair conservative --keep-going
+swift run -c release MeshDenoiserBench --input-dir path/to/usdz-fixtures --backend all --keep-going --fail-on-error --max-error-threshold 0.002 --mean-error-threshold 0.0002 --max-total-seconds-threshold 10 --max-memory-mb-threshold 8192
+swift run -c release MeshDenoiserBench --input-dir path/to/usdz-fixtures --backend nativeGPU --repair conservative --no-reference-check --keep-going --fail-on-error --max-total-seconds-threshold 10 --max-memory-mb-threshold 8192
+```
+
+The benchmark importer uses ModelIO on macOS for `.usd`, `.usda`, `.usdc`, and
+`.usdz`, flattens mesh transforms, and triangulates supported submeshes before
+calling the buffers-in API. Directory and manifest runs add an `input` column to
+the CSV output so production USDZ fixture results can be compared asset by asset.
+Use `--keep-going` during broad fixture sweeps to keep benchmarking after an
+asset fails validation; those rows add `status,error` columns and include simple
+mesh diagnostics such as boundary, non-manifold, and degenerate-face counts.
+Add `--fail-on-error` in CI to complete the sweep and then exit nonzero if any
+asset/backend row failed. Add `--max-error-threshold` and
+`--mean-error-threshold` to make successful native rows fail the sweep when
+reference parity exceeds the release gate. Add `--max-total-seconds-threshold`
+and `--max-memory-mb-threshold` to enforce runtime and peak-RSS budgets on the
+same batch pass. Use `--no-reference-check` for production runtime and memory
+gates on large USDZ assets when you do not want the benchmark-only C++ reference
+comparison to affect peak RSS; error thresholds are only valid when reference
+checking is enabled.
+
+Use `--repair conservative` to opt into an explicit mesh preflight before
+denoising. The conservative pass welds duplicate or near-duplicate vertices,
+removes degenerate and duplicate triangles, drops extra faces around
+non-manifold edges, orients shared edges consistently, and compacts unused
+vertices. It does not fill holes or silently run by default. Repair runs add
+per-row CSV diagnostics describing before/after vertex, face, boundary-edge,
+non-manifold-edge, and degenerate-face counts, plus removed face and vertex
+counts.
+
+CSV output columns are:
+
+```text
+backend,vertices,faces,total_secs,max_error_vs_reference,mean_error_vs_reference,peak_memory_mb
+```
+
+With `--no-reference-check`, native denoise rows omit the reference-error
+columns:
+
+```text
+backend,vertices,faces,total_secs,peak_memory_mb
+```
+
+Benchmark the native vertex-update stage directly with:
+
+```bash
+swift run -c release MeshDenoiserBench --mode filter --backend nativeGPU --faces 81920
+swift run -c release MeshDenoiserBench --mode vertex-update --faces 81920
+```
+
+The filter and vertex-update modes use deterministic generated meshes by
+default, accept `--input`, and print:
+
+```text
+mode,backend,vertices,faces,total_secs,peak_memory_mb,checksum
+```
 
 Vendored dependencies (Eigen, OpenMesh Core) are pinned by `scripts/vendor_dependencies.sh`.
 

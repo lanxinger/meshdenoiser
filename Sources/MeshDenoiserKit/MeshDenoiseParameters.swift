@@ -3,6 +3,17 @@ import CMeshDenoiserCore
 /// SD-filter denoising parameters. Defaults are the tuned values from MeshDenoiserDefaults.txt.
 public struct MeshDenoiseParameters: Sendable, Equatable {
 
+    public enum Backend: Sendable, Equatable, CaseIterable {
+        /// Native GPU if a Metal device exists, else native CPU.
+        case automatic
+        /// Native Metal implementation; throws `.gpuUnavailable` without a Metal device.
+        case nativeGPU
+        /// Native CPU implementation.
+        case nativeCPU
+        /// Wrapped C++ implementation; current test oracle.
+        case reference
+    }
+
     public enum LinearSolver: Int32, Sendable {
         /// Iterative conjugate gradient — lower memory, use for very large meshes (>~500k vertices).
         case conjugateGradient = 0
@@ -29,8 +40,18 @@ public struct MeshDenoiseParameters: Sendable, Equatable {
     public var linearSolver: LinearSolver = .ldlt
     /// Forces single-threaded execution for bit-reproducible output.
     public var deterministic: Bool = false
+    /// Which implementation runs the filter. Kept on `.reference` until native parity gates pass.
+    public var backend: Backend = .reference
 
     public init() {}
+
+    var isValid: Bool {
+        lambda > 0 && eta > 0 && mu > 0 && nu > 0
+            && meshUpdateClosenessWeight >= 0
+            && meshUpdateIterations > 0
+            && meshUpdateDisplacementEps.isFinite
+            && outerIterations > 0
+    }
 
     var cParams: md_params {
         var c = md_params()

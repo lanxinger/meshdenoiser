@@ -72,6 +72,15 @@ final class DenoiseContractTests: XCTestCase {
         }
     }
 
+    func testDenoiseErrorsHaveLocalizedDescriptionsAndAreSendable() {
+        assertSendable(MeshDenoiseError.self)
+
+        XCTAssertEqual(MeshDenoiseError.invalidInput.errorDescription, "Mesh input is empty or invalid.")
+        XCTAssertEqual(MeshDenoiseError.invalidParameters.errorDescription, "Mesh denoising parameters are invalid.")
+        XCTAssertEqual(MeshDenoiseError.solverFailed.errorDescription, "The mesh denoising solver failed.")
+        XCTAssertEqual(MeshDenoiseError.gpuUnavailable.errorDescription, "A Metal device is not available.")
+    }
+
     func testCancellationThrowsCancellationError() async {
         let (positions, indices) = Self.noisyOctahedron()
         var params = MeshDenoiseParameters()
@@ -118,4 +127,6 @@ final class DenoiseContractTests: XCTestCase {
             XCTFail("Expected \(expected), got \(error)", file: file, line: line)
         }
     }
+
+    private func assertSendable<T: Sendable>(_ type: T.Type) {}
 }

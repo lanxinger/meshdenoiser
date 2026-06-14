@@ -6,6 +6,8 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "MeshDenoiserKit", targets: ["MeshDenoiserKit"]),
+        .executable(name: "MeshDenoiserBench", targets: ["MeshDenoiserBench"]),
+        .executable(name: "MeshDenoiserProcess", targets: ["MeshDenoiserProcess"]),
     ],
     targets: [
         // OpenMesh headers deliberately live in "Headers", not the SPM default
@@ -32,13 +34,35 @@ let package = Package(
             ]
         ),
         .target(
+            name: "MeshDenoiserNative",
+            path: "Sources/MeshDenoiserNative",
+            resources: [.copy("FilterKernels.metal")]
+        ),
+        .target(
             name: "MeshDenoiserKit",
-            dependencies: ["CMeshDenoiserCore"],
-            path: "Sources/MeshDenoiserKit"
+            dependencies: ["CMeshDenoiserCore", "MeshDenoiserNative"],
+            path: "Sources/MeshDenoiserKit",
+            linkerSettings: [
+                .linkedFramework("ModelIO", .when(platforms: [.macOS])),
+                .linkedFramework("SceneKit", .when(platforms: [.macOS])),
+            ]
+        ),
+        .executableTarget(
+            name: "MeshDenoiserBench",
+            dependencies: ["MeshDenoiserKit", "MeshDenoiserNative"],
+            path: "Sources/MeshDenoiserBench",
+            linkerSettings: [
+                .linkedFramework("ModelIO", .when(platforms: [.macOS])),
+            ]
+        ),
+        .executableTarget(
+            name: "MeshDenoiserProcess",
+            dependencies: ["MeshDenoiserKit"],
+            path: "Sources/MeshDenoiserProcess"
         ),
         .testTarget(
             name: "MeshDenoiserKitTests",
-            dependencies: ["MeshDenoiserKit"],
+            dependencies: ["MeshDenoiserKit", "MeshDenoiserNative"],
             path: "Tests/MeshDenoiserKitTests",
             resources: [.copy("Fixtures")]
         ),
