@@ -103,7 +103,7 @@ public:
 
   // --- constructor/destructor ---
   ArrayKernel();
-  virtual ~ArrayKernel();
+  virtual ~ArrayKernel() override;
 
   /** ArrayKernel uses the default copy constructor and assignment operator, which means
       that the connectivity and all properties are copied, including reference

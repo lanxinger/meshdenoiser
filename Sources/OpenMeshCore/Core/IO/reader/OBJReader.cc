@@ -287,8 +287,8 @@ read_vertices(std::istream& _in, BaseImporter& _bi, Options& _opt,
               std::vector<VertexHandle> & vertexHandles,
               Options & fileOptions)
 {
-    double x, y, z, u, v, w;
-    double r, g, b;
+    float x, y, z, u, v, w;
+    float r, g, b;
 
     std::string line;
     std::string keyWrd;
@@ -531,7 +531,7 @@ read(std::istream& _in, BaseImporter& _bi, Options& _opt)
     // faces
     else if (keyWrd == "f")
     {
-      int component(0), nV(0);
+      int component(0);
       int value;
 
       vhandles.clear();
@@ -688,7 +688,6 @@ read(std::istream& _in, BaseImporter& _bi, Options& _opt)
         } while ( !vertex.empty() );
 
         component = 0;
-        nV++;
 
       }
 

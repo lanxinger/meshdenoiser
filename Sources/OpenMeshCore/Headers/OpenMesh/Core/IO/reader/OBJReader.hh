@@ -85,7 +85,7 @@ public:
 
   _OBJReader_();
 
-  virtual ~_OBJReader_() { }
+  virtual ~_OBJReader_() override { }
 
   std::string get_description() const override { return "Alias/Wavefront"; }
   std::string get_extensions()  const override { return "obj"; }

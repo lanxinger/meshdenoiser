@@ -113,7 +113,7 @@ public:
     {
       if (*p_it != nullptr &&
          (*p_it)->name() == _name  //skip deleted properties
-         && (*p_it)->internal_type_name() == get_type_name<T>()     // new check type
+         && is_correct_type_name<T>( (*p_it)->internal_type_name() )     // new check type
          )
       {
         return BasePropHandleT<T>(idx);
@@ -139,7 +139,7 @@ public:
   {
     assert(_h.idx() >= 0 && _h.idx() < (int)properties_.size());
     assert(properties_[_h.idx()] != nullptr);
-    assert( properties_[_h.idx()]->internal_type_name() == get_type_name<T>() );
+    assert( is_correct_type_name<T>( properties_[_h.idx()]->internal_type_name() ) );
     PropertyT<T> *p = static_cast< PropertyT<T>* > (properties_[_h.idx()]);
     assert(p != nullptr);
     return *p;
@@ -150,7 +150,7 @@ public:
   {
     assert(_h.idx() >= 0 && _h.idx() < (int)properties_.size());
     assert(properties_[_h.idx()] != nullptr);
-    assert( properties_[_h.idx()]->internal_type_name() == get_type_name<T>() );
+    assert( is_correct_type_name<T>( properties_[_h.idx()]->internal_type_name() ) );
     PropertyT<T> *p = static_cast< PropertyT<T>* > (properties_[_h.idx()]);
     assert(p != nullptr);
     return *p;
@@ -287,7 +287,7 @@ protected: // generic add/get
   {
     assert( _idx < properties_.size());
     assert( properties_[_idx] != nullptr);
-    BaseProperty *p = properties_[_idx];
+    const BaseProperty *p = properties_[_idx];
     assert( p != nullptr );
     return *p;
   }

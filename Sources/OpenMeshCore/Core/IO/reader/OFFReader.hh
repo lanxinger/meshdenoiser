@@ -113,7 +113,7 @@ public:
   _OFFReader_();
 
   /// Destructor
-  virtual ~_OFFReader_() {};
+  virtual ~_OFFReader_() override {};
 
   std::string get_description() const override { return "Object File Format"; }
   std::string get_extensions()  const override { return "off"; }

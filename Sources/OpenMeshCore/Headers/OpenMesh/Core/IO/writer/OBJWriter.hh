@@ -86,7 +86,7 @@ public:
   _OBJWriter_();
 
   /// Destructor
-  virtual ~_OBJWriter_() {};
+  virtual ~_OBJWriter_() override {};
 
   std::string get_description() const override  { return "Alias/Wavefront"; }
   std::string get_extensions()  const override  { return "obj"; }

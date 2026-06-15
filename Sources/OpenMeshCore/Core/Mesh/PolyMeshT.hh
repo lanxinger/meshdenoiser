@@ -192,6 +192,23 @@ public:
       If the mesh types vary, use PolyMeshT::assign() instead. */
 
   // --- creation ---
+  //
+  /**
+   * \brief Create a smart handle from a regular handle.
+   */
+  template<typename H,
+    typename=SmartHandle<H> /* SFINAE */>
+  auto make_smart(H const &h) const -> typename SmartHandle<H>::type const
+  {return OpenMesh::make_smart(h, this);}
+
+  /**
+   * \brief Return the passed smart handle. This allows for code using make_smart(h)
+   *        to keep compiling when h's type is changed to a smart handle.
+   */
+  template<typename SH,
+  typename=typename std::enable_if<std::is_base_of<SmartBaseHandle, SH>::value>::type>
+  SH make_smart(SH const &sh) const
+  {return sh;}
 
   /**
    * \brief Adds a new default-initialized vertex.
@@ -199,7 +216,7 @@ public:
    * \sa new_vertex(const Point&), new_vertex_dirty()
    */
   inline SmartVertexHandle new_vertex()
-  { return make_smart(Kernel::new_vertex(), this); }
+  { return make_smart(Kernel::new_vertex()); }
 
   /**
    * \brief Adds a new vertex initialized to a custom position.
@@ -211,7 +228,7 @@ public:
   {
     VertexHandle vh(Kernel::new_vertex());
     this->set_point(vh, _p);
-    return make_smart(vh, this);
+    return make_smart(vh);
   }
 
   /**
@@ -229,7 +246,7 @@ public:
   {
     VertexHandle vh(Kernel::new_vertex_dirty());
     this->set_point(vh, _p);
-    return make_smart(vh, this);
+    return make_smart(vh);
   }
 
   /** Alias for new_vertex(const Point&).
@@ -240,7 +257,7 @@ public:
 
   /// Alias for new_vertex_dirty().
   inline SmartVertexHandle add_vertex_dirty(const Point _p)
-  { return make_smart(new_vertex_dirty(_p), this); }
+  { return make_smart(new_vertex_dirty(_p)); }
 
   // --- normal vectors ---
 

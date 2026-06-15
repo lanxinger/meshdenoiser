@@ -88,12 +88,12 @@ public:
 
   //Define Halfedge based on PrevHalfedge.
   typedef typename GenProg::IF<
-    (bool)(HAttribs & Attributes::PrevHalfedge),
+    (bool)(static_cast<Attributes::AttributeBits>(HAttribs) & Attributes::PrevHalfedge),
     typename Connectivity::Halfedge,
     typename Connectivity::HalfedgeNoPrev
   >::Result   Halfedge;
   typedef typename GenProg::IF<
-    (bool)(HAttribs & Attributes::PrevHalfedge),
+    (bool)(static_cast<Attributes::AttributeBits>(HAttribs) & Attributes::PrevHalfedge),
     GenProg::Bool2Type<true>,
     GenProg::Bool2Type<false>         
   >::Result   HasPrevHalfedge;
@@ -162,58 +162,61 @@ public:
   {
     this->add_property( points_, "v:points" );
 
-    if (VAttribs & Attributes::Normal)
+    const auto has_flag = [](Attribs _attr, Attributes::AttributeBits _flag)
+    { return static_cast<Attributes::AttributeBits>(_attr) & _flag; };
+
+    if (has_flag(VAttribs, Attributes::Normal))
       request_vertex_normals();
 
-    if (VAttribs & Attributes::Color)
+    if (has_flag(VAttribs, Attributes::Color))
       request_vertex_colors();
 
-    if (VAttribs & Attributes::TexCoord1D)
+    if (has_flag(VAttribs, Attributes::TexCoord1D))
       request_vertex_texcoords1D();
 
-    if (VAttribs & Attributes::TexCoord2D)
+    if (has_flag(VAttribs, Attributes::TexCoord2D))
       request_vertex_texcoords2D();
 
-    if (VAttribs & Attributes::TexCoord3D)
+    if (has_flag(VAttribs, Attributes::TexCoord3D))
       request_vertex_texcoords3D();
 
-    if (HAttribs & Attributes::TexCoord1D)
+    if (has_flag(HAttribs, Attributes::TexCoord1D))
       request_halfedge_texcoords1D();
 
-    if (HAttribs & Attributes::TexCoord2D)
+    if (has_flag(HAttribs, Attributes::TexCoord2D))
       request_halfedge_texcoords2D();
 
-    if (HAttribs & Attributes::TexCoord3D)
+    if (has_flag(HAttribs, Attributes::TexCoord3D))
       request_halfedge_texcoords3D();
 
-    if (HAttribs & Attributes::Color)
+    if (has_flag(HAttribs, Attributes::Color))
       request_halfedge_colors();
 
-    if (VAttribs & Attributes::Status)
+    if (has_flag(VAttribs, Attributes::Status))
       Connectivity::request_vertex_status();
 
-    if (HAttribs & Attributes::Status)
+    if (has_flag(HAttribs, Attributes::Status))
       Connectivity::request_halfedge_status();
 
-    if (HAttribs & Attributes::Normal)
+    if (has_flag(HAttribs, Attributes::Normal))
       request_halfedge_normals();
 
-    if (EAttribs & Attributes::Status)
+    if (has_flag(EAttribs, Attributes::Status))
       Connectivity::request_edge_status();
-    
-    if (EAttribs & Attributes::Color)
+
+    if (has_flag(EAttribs, Attributes::Color))
       request_edge_colors();
 
-    if (FAttribs & Attributes::Normal)
+    if (has_flag(FAttribs, Attributes::Normal))
       request_face_normals();
 
-    if (FAttribs & Attributes::Color)
+    if (has_flag(FAttribs, Attributes::Color))
       request_face_colors();
 
-    if (FAttribs & Attributes::Status)
+    if (has_flag(FAttribs, Attributes::Status))
       Connectivity::request_face_status();
 
-    if (FAttribs & Attributes::TextureIndex)
+    if (has_flag(FAttribs, Attributes::TextureIndex))
       request_face_texture_index();
 
     //FIXME: data properties might actually cost storage even

@@ -84,12 +84,12 @@ class GenericIteratorT {
         //--- Typedefs ---
 
         typedef ValueHandle                     value_handle;
-        typedef value_handle                    value_type;
         typedef std::bidirectional_iterator_tag iterator_category;
         typedef std::ptrdiff_t                  difference_type;
         typedef const Mesh*                     mesh_ptr;
         typedef const Mesh&                     mesh_ref;
         typedef decltype(make_smart(std::declval<ValueHandle>(), std::declval<Mesh>())) SmartHandle;
+        typedef SmartHandle                     value_type;
         typedef const SmartHandle&              reference;
         typedef const SmartHandle*              pointer;
 

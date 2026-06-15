@@ -96,7 +96,7 @@ public:
   _OMWriter_();
 
   /// Destructor
-  virtual ~_OMWriter_() {};
+  virtual ~_OMWriter_() override {};
 
   std::string get_description() const override
   { return "OpenMesh Format"; }

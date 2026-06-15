@@ -1113,9 +1113,14 @@ void PolyConnectivity::split_edge(EdgeHandle _eh, VertexHandle _vh)
   set_next_halfedge_handle(new_e, h0);
   set_next_halfedge_handle(h1, opposite_halfedge_handle(new_e));
   
-  set_next_halfedge_handle(ph0, new_e);
-  set_next_halfedge_handle(opposite_halfedge_handle(new_e), nh1);
-  
+  if (ph0 == h1) {
+    // valence one vfrom with p(h0) = opp(h0):
+    set_next_halfedge_handle(opposite_halfedge_handle(new_e), new_e);
+  } else {
+    // regular case
+    set_next_halfedge_handle(ph0, new_e);
+    set_next_halfedge_handle(opposite_halfedge_handle(new_e), nh1);
+  }
 //  set_prev_halfedge_handle(new_e, ph0);
 //  set_prev_halfedge_handle(opposite_halfedge_handle(new_e), h1);
   

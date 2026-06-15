@@ -87,7 +87,7 @@ class OPENMESHDLLEXPORT _OMReader_ : public BaseReader
 public:
 
   _OMReader_();
-  virtual ~_OMReader_() { }
+  virtual ~_OMReader_() override { }
 
   std::string get_description() const override { return "OpenMesh File Format"; }
   std::string get_extensions()  const override { return "om"; }

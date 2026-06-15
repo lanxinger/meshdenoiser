@@ -93,7 +93,7 @@ public:
   _PLYWriter_();
 
   /// Destructor
-  virtual ~_PLYWriter_() {};
+  virtual ~_PLYWriter_() override {};
 
   std::string get_description() const override { return "PLY polygon file format"; }
   std::string get_extensions()  const override  { return "ply"; }

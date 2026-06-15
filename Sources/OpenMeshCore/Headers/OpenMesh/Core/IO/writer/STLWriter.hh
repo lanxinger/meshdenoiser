@@ -86,7 +86,7 @@ public:
   _STLWriter_();
 
   /// Destructor
-  virtual ~_STLWriter_() {};
+  virtual ~_STLWriter_() override {};
 
   std::string get_description() const override { return "Stereolithography Format"; }
   std::string get_extensions()  const override { return "stl stla stlb"; }

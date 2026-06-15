@@ -78,12 +78,12 @@ class EntityRange : public SmartRangeT<EntityRange<RangeTraitT>, typename RangeT
         typedef typename RangeTraitT::ITER_TYPE iterator;
         typedef typename RangeTraitT::ITER_TYPE const_iterator;
 
-        explicit EntityRange(typename RangeTraitT::CONTAINER_TYPE &container) : container_(container) {}
-        typename RangeTraitT::ITER_TYPE begin() const { return RangeTraitT::begin(container_); }
-        typename RangeTraitT::ITER_TYPE end() const { return RangeTraitT::end(container_); }
+        explicit EntityRange(typename RangeTraitT::CONTAINER_TYPE &container) : container_(&container) {}
+        typename RangeTraitT::ITER_TYPE begin() const { return RangeTraitT::begin(*container_); }
+        typename RangeTraitT::ITER_TYPE end() const { return RangeTraitT::end(*container_); }
 
     private:
-        typename RangeTraitT::CONTAINER_TYPE &container_;
+        typename RangeTraitT::CONTAINER_TYPE *container_;
 };
 
 /// Generic class for iterator ranges.
@@ -96,26 +96,25 @@ class CirculatorRange : public SmartRangeT<CirculatorRange<CirculatorRangeTraitT
         typedef typename CirculatorRangeTraitT::CONTAINER_TYPE CONTAINER_TYPE;
         typedef ITER_TYPE iterator;
         typedef ITER_TYPE const_iterator;
-
         CirculatorRange(
                 const CONTAINER_TYPE &container,
                 CENTER_ENTITY_TYPE center) :
-            container_(container), heh_()
+            container_(&container), heh_()
         {
-          auto it = CirculatorRangeTraitT::begin(container_, center);
+          auto it = CirculatorRangeTraitT::begin(*container_, center);
           heh_ = it.heh_;
         }
 
         CirculatorRange(
                 const CONTAINER_TYPE &container,
                 HalfedgeHandle heh, int) :
-            container_(container), heh_(heh) {}
+            container_(&container), heh_(heh) {}
 
-        ITER_TYPE begin() const { return CirculatorRangeTraitT::begin(container_, heh_, 1); }
-        ITER_TYPE end()   const { return CirculatorRangeTraitT::end(container_, heh_, 1); }
+        ITER_TYPE begin() const { return CirculatorRangeTraitT::begin(*container_, heh_, 1); }
+        ITER_TYPE end()   const { return CirculatorRangeTraitT::end(*container_, heh_, 1); }
 
     private:
-        const CONTAINER_TYPE &container_;
+        const CONTAINER_TYPE *container_;
         HalfedgeHandle heh_;
 };
 

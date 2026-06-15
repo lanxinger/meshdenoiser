@@ -474,7 +474,7 @@ void _PLYWriter_::writeValue(ValueType _type, std::ostream& _out, int value) con
       break;
 //     case ValueTypeUINT8:
 default :
-      tmp8 = value;
+      tmp8 = static_cast<uint8_t>(value);
       store(_out, tmp8, options_.check(Options::MSB) );
       break;
 //     default :
@@ -496,7 +496,7 @@ void _PLYWriter_::writeValue(ValueType _type, std::ostream& _out, unsigned int v
       break;
 //     case ValueTypeUINT8:
 default :
-      tmp8 = value;
+      tmp8 = static_cast<uint8_t>(value);
       store(_out, tmp8, options_.check(Options::MSB) );
       break;
 //     default :

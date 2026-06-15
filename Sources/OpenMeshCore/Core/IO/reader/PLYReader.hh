@@ -220,7 +220,7 @@ private:
   }
 
   template<typename T>
-  inline void read(_PLYReader_::ValueType _type, std::istream& _in, T& _value, OpenMesh::GenProg::FalseType /*_binary*/) const
+  inline void read(_PLYReader_::ValueType /*_type*/, std::istream& _in, T& _value, OpenMesh::GenProg::FalseType /*_binary*/) const
   {
     _in >> _value;
   }
@@ -232,7 +232,7 @@ private:
   }
 
   template<typename T>
-  inline void readInteger(_PLYReader_::ValueType _type, std::istream& _in, T& _value, OpenMesh::GenProg::FalseType /*_binary*/) const
+  inline void readInteger(_PLYReader_::ValueType /*_type*/, std::istream& _in, T& _value, OpenMesh::GenProg::FalseType /*_binary*/) const
   {
     _in >> _value;
   }

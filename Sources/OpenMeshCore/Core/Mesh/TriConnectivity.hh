@@ -55,7 +55,7 @@ class OPENMESHDLLEXPORT TriConnectivity : public PolyConnectivity
 public:
 
   TriConnectivity() {}
-  virtual ~TriConnectivity() {}
+  virtual ~TriConnectivity() override {}
 
   inline static bool is_triangles()
   { return true; }

@@ -521,7 +521,7 @@ public:
 public:
 
   PolyConnectivity()  {}
-  virtual ~PolyConnectivity() {}
+  virtual ~PolyConnectivity() override {}
 
   inline static bool is_triangles()
   { return false; }

@@ -67,7 +67,7 @@ namespace IO {
 static inline char tolower(char c)
 {
   using namespace std;
-  return ::tolower(c); 
+  return static_cast<char>(::tolower(c));
 }
 
 #endif

@@ -171,7 +171,7 @@ public:
   }
 
   /// Destructor
-  virtual ~TriMeshT() {}
+  virtual ~TriMeshT() override {}
 
   //--- halfedge collapse / vertex split ---
 
@@ -435,7 +435,7 @@ public:
   //@{
 
   /** Calculate normal vector for face _fh (specialized for TriMesh). */
-  Normal calc_face_normal(FaceHandle _fh) const;
+  Normal calc_face_normal(FaceHandle _fh) const override;
 
   //@}
 };

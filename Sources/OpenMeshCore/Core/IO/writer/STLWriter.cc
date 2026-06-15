@@ -128,8 +128,6 @@ write(std::ostream& _os, BaseExporter& _be, const Options& _writeOptions, std::s
     return write_stlb(_os, _be, _writeOptions);
   else
     return write_stla(_os, _be, _writeOptions);
-
-  return false;
 }
 
 

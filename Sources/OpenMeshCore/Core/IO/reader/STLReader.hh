@@ -89,7 +89,7 @@ public:
   _STLReader_();
 
   /// Destructor
-  virtual ~_STLReader_() {};
+  virtual ~_STLReader_() override {};
 
 
   std::string get_description() const override

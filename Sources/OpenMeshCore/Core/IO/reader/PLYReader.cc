@@ -964,7 +964,7 @@ void _PLYReader_::readValue(ValueType _type, std::istream& _in, double& _value) 
 void _PLYReader_::readValue(ValueType _type, std::istream& _in, unsigned char& _value) const{
   unsigned int tmp;
   readValue(_type,_in,tmp);
-  _value = tmp;
+  _value = static_cast<unsigned char>(tmp);
 }
 
 //-----------------------------------------------------------------------------
@@ -972,7 +972,7 @@ void _PLYReader_::readValue(ValueType _type, std::istream& _in, unsigned char& _
 void _PLYReader_::readValue(ValueType _type, std::istream& _in, unsigned short& _value) const{
   unsigned int tmp;
   readValue(_type,_in,tmp);
-  _value = tmp;
+  _value = static_cast<unsigned short>(tmp);
 }
 
 //-----------------------------------------------------------------------------
@@ -980,7 +980,7 @@ void _PLYReader_::readValue(ValueType _type, std::istream& _in, unsigned short& 
 void _PLYReader_::readValue(ValueType _type, std::istream& _in, signed char& _value) const{
   int tmp;
   readValue(_type,_in,tmp);
-  _value = tmp;
+  _value = static_cast<signed char>(tmp);
 }
 
 //-----------------------------------------------------------------------------
@@ -988,7 +988,7 @@ void _PLYReader_::readValue(ValueType _type, std::istream& _in, signed char& _va
 void _PLYReader_::readValue(ValueType _type, std::istream& _in, short& _value) const{
   int tmp;
   readValue(_type,_in,tmp);
-  _value = tmp;
+  _value = static_cast<short>(tmp);
 }
 
 

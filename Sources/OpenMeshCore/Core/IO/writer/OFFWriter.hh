@@ -95,7 +95,7 @@ public:
 
   _OFFWriter_();
 
-  virtual ~_OFFWriter_() {};
+  virtual ~_OFFWriter_() override {};
 
   std::string get_description() const override { return "no description"; }
   std::string get_extensions()  const override  { return "off"; }

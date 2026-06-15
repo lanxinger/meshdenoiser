@@ -482,10 +482,11 @@ class GenericCirculator_ValueHandleFnsT_DEPRECATED<Mesh, CenterEntityHandle, typ
 template <typename GenericCirculatorT_DEPRECATED_TraitsT>
 class GenericCirculatorT_DEPRECATED : protected GenericCirculatorBaseT<typename GenericCirculatorT_DEPRECATED_TraitsT::Mesh> {
     public:
+        using ValueHandle = typename GenericCirculatorT_DEPRECATED_TraitsT::ValueHandle;
         using Mesh = typename GenericCirculatorT_DEPRECATED_TraitsT::Mesh;
         using CenterEntityHandle = typename GenericCirculatorT_DEPRECATED_TraitsT::CenterEntityHandle;
-        using value_type = typename GenericCirculatorT_DEPRECATED_TraitsT::ValueHandle;
-        using smart_value_type = decltype (make_smart(std::declval<value_type>(), std::declval<Mesh>()));
+        using smart_value_type = decltype (make_smart(std::declval<ValueHandle>(), std::declval<Mesh>()));
+        using value_type = smart_value_type;
 
         typedef std::ptrdiff_t difference_type;
         typedef const value_type& reference;
@@ -494,7 +495,7 @@ class GenericCirculatorT_DEPRECATED : protected GenericCirculatorBaseT<typename 
 
         typedef typename GenericCirculatorBaseT<Mesh>::mesh_ptr mesh_ptr;
         typedef typename GenericCirculatorBaseT<Mesh>::mesh_ref mesh_ref;
-        typedef GenericCirculator_ValueHandleFnsT_DEPRECATED<Mesh, CenterEntityHandle, value_type> GenericCirculator_ValueHandleFns;
+        typedef GenericCirculator_ValueHandleFnsT_DEPRECATED<Mesh, CenterEntityHandle, ValueHandle> GenericCirculator_ValueHandleFns;
 
         template <typename> friend class OpenMesh::CirculatorRange;
 
@@ -561,7 +562,7 @@ class GenericCirculatorT_DEPRECATED : protected GenericCirculatorBaseT<typename 
         smart_value_type operator*() const {
 #ifndef NDEBUG
             assert(this->heh_.is_valid());
-            value_type res = (GenericCirculatorT_DEPRECATED_TraitsT::toHandle(this->mesh_, this->heh_));
+            ValueHandle res = (GenericCirculatorT_DEPRECATED_TraitsT::toHandle(this->mesh_, this->heh_));
             assert(res.is_valid());
             return make_smart(res, this->mesh_);
 #else
@@ -636,7 +637,7 @@ class GenericCirculatorT_DEPRECATED : protected GenericCirculatorBaseT<typename 
          * -> and * instead.
          */
         OM_DEPRECATED("Implicit casts of iterators are unsafe. Use dereferencing operators -> and * instead.")
-        operator value_type() const {
+        operator ValueHandle() const {
           return **this;
         }
 
