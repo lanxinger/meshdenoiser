@@ -345,7 +345,7 @@ class Timer
 {
 public:
 
-	typedef int EventID;
+	typedef std::size_t EventID;
 
 	EventID get_time()
 	{
@@ -362,8 +362,8 @@ public:
 
 	double elapsed_time(EventID event1, EventID event2)
 	{
-		assert(event1 >= 0 && event1 < static_cast<EventID>(time_values_.size()));
-		assert(event2 >= 0 && event2 < static_cast<EventID>(time_values_.size()));
+		assert(event1 < time_values_.size());
+		assert(event2 < time_values_.size());
 
 		#ifdef USE_OPENMP
 			return time_values_[event2] - time_values_[event1];
@@ -694,8 +694,8 @@ protected:
 
 protected:
 
-	int signal_dim_;		// Dimension of the signals
-	int signal_count_;		// Number of signals
+	Eigen::Index signal_dim_;		// Dimension of the signals
+	Eigen::Index signal_count_;		// Number of signals
 
 	Eigen::MatrixXd signals_;		// Signals to be filtered. Represented in homogeneous form when there is no normalization constraint
 	Eigen::VectorXd area_weights_;	// Area weights for each element

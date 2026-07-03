@@ -179,7 +179,9 @@ protected:
 
 		// Update the guidance to patch-based normals
 
-		int face_count = mesh_.n_faces(), edge_count = mesh_.n_edges(), vtx_count = mesh_.n_vertices();
+		int face_count = checked_int_count(mesh_.n_faces(), "face count");
+		int edge_count = checked_int_count(mesh_.n_edges(), "edge count");
+		int vtx_count = checked_int_count(mesh_.n_vertices(), "vertex count");
 
 		std::vector<double> edge_saliency(edge_count, 0); // Pre-computed edge saliency, defined as difference between adjacent normals
 
@@ -260,8 +262,8 @@ protected:
 			neighborhood_faces_per_face[i] = faces_in_patch;
 
 			// Collect face normals and edge saliency values from the patch, and compute patch normal consistency value and average normal
-			int n_faces_in_patch = faces_in_patch.size();
-			int n_edges_in_patch = edges_in_patch.size();
+			int n_faces_in_patch = checked_int_count(faces_in_patch.size(), "patch face count");
+			int n_edges_in_patch = checked_int_count(edges_in_patch.size(), "patch edge count");
 
 			Eigen::Matrix3Xd face_normals(3, n_faces_in_patch);
 			Eigen::VectorXd face_area(n_faces_in_patch);

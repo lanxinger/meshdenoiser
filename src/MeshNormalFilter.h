@@ -38,9 +38,27 @@
 #include <algorithm>
 #include <unordered_map>
 #include <array>
+#include <stdexcept>
+#include <string>
 
 namespace SDFilter
 {
+
+inline int checked_int_count(std::size_t value, const char *label)
+{
+	if(value > static_cast<std::size_t>(std::numeric_limits<int>::max())){
+		throw std::overflow_error(std::string(label) + " exceeds int range");
+	}
+	return static_cast<int>(value);
+}
+
+inline int checked_int_count(Eigen::Index value, const char *label)
+{
+	if(value < 0 || value > static_cast<Eigen::Index>(std::numeric_limits<int>::max())){
+		throw std::overflow_error(std::string(label) + " exceeds int range");
+	}
+	return static_cast<int>(value);
+}
 
 class MeshFilterParameters : public Parameters
 {
@@ -200,7 +218,7 @@ protected:
 	{
 		const double radius = 3.0 * param.eta;
 		const double radius_sqr = radius * radius;
-		const int n_faces = mesh_.n_faces();
+		const int n_faces = checked_int_count(mesh_.n_faces(), "face count");
 		if(n_faces <= 0){
 			return false;
 		}
@@ -366,8 +384,8 @@ private:
 	// Set up and pre-factorize the linear system for iterative mesh update
 	bool setup_mesh_udpate_system(const Matrix3Xi &face_vtx_idx, double w_closeness)
 	{
-		const int n_faces = mesh_.n_faces();
-		const int n_vtx = mesh_.n_vertices();
+		const int n_faces = checked_int_count(mesh_.n_faces(), "face count");
+		const int n_vtx = checked_int_count(mesh_.n_vertices(), "vertex count");
 		const bool same_problem_size = (mesh_update_system_n_faces_ == n_faces && mesh_update_system_n_vtx_ == n_vtx);
 		const bool same_closeness = (std::isfinite(mesh_update_system_closeness_weight_) &&
 			std::abs(mesh_update_system_closeness_weight_ - w_closeness) <= std::numeric_limits<double>::epsilon());
@@ -434,8 +452,8 @@ private:
 
 	void get_cached_face_vertex_indices(const TriMesh &mesh, Matrix3Xi &face_vtx_idx)
 	{
-		const int n_faces = mesh.n_faces();
-		const int n_vtx = mesh.n_vertices();
+		const int n_faces = checked_int_count(mesh.n_faces(), "face count");
+		const int n_vtx = checked_int_count(mesh.n_vertices(), "vertex count");
 		if(!cached_face_vtx_idx_valid_ || cached_face_vtx_n_faces_ != n_faces || cached_face_vtx_n_vtx_ != n_vtx)
 		{
 			get_face_vertex_indices(mesh, cached_face_vtx_idx_);
@@ -479,7 +497,7 @@ private:
 		Matrix3X vtx_pos;
 		get_vertex_points(output_mesh, vtx_pos);
 
-		int n_faces = output_mesh.n_faces();
+		int n_faces = checked_int_count(output_mesh.n_faces(), "face count");
 		Eigen::Matrix3Xd target_plane_local_frames(3, 2 * n_faces);	// Local frame for the target plane of each face
 		std::vector<bool> local_frame_initialized(n_faces, false);
 
@@ -487,7 +505,7 @@ private:
 		MatrixX3dRM wX0 = vtx_pos.transpose() * w_closeness;	// Part of the linear system right-hand-side that corresponds to initial vertex positions
 		MatrixX3dRM B(3 * n_faces, 3);	// Per-face target position of the new vertices
 
-		int n_vtx = output_mesh.n_vertices();
+		int n_vtx = checked_int_count(output_mesh.n_vertices(), "vertex count");
 		MatrixX3dRM rhs(n_vtx, 3), sol(n_vtx, 3);
 
 		for(int iter = 0; iter < param.mesh_update_iter; ++ iter)
@@ -576,8 +594,8 @@ private:
 		Matrix3X vtx_pos;
 		get_vertex_points(output_mesh, vtx_pos);
 
-		int n_faces = output_mesh.n_faces();
-		int n_vtx = output_mesh.n_vertices();
+		int n_faces = checked_int_count(output_mesh.n_faces(), "face count");
+		int n_vtx = checked_int_count(output_mesh.n_vertices(), "vertex count");
 		Eigen::VectorXd face_area_weights;
 		get_face_area_weights(output_mesh, face_area_weights);
 
@@ -694,7 +712,7 @@ private:
 	// Compute the centroid of a mesh given its vertex positions and face areas
 	Eigen::Vector3d compute_centroid(const Eigen::Matrix3Xi &face_vtx_idx, const Eigen::VectorXd &face_areas, const Eigen::Matrix3Xd &vtx_pos)
 	{
-		int n_faces = face_vtx_idx.cols();
+		int n_faces = checked_int_count(face_vtx_idx.cols(), "face count");
 		Eigen::Matrix3Xd face_centroids(3, n_faces);
 
 		OMP_PARALLEL
@@ -732,7 +750,7 @@ private:
 		get_face_area_weights(mesh_, face_area_weights);
 		Eigen::Matrix3Xi face_vtx_indices;
 		get_face_vertex_indices(mesh_, face_vtx_indices);
-		int n_faces = mesh_.n_faces();
+		int n_faces = checked_int_count(mesh_.n_faces(), "face count");
 
 		Eigen::VectorXd vtx_area(mesh_.n_vertices());
 		vtx_area.setZero();
@@ -750,7 +768,7 @@ private:
 
 	void show_error_statistics(const Eigen::VectorXd &err_values, double bin_size, int n_bins)
 	{
-		int n_elems = err_values.size();
+		int n_elems = checked_int_count(err_values.size(), "error value count");
 
 		Eigen::VectorXi error_bin_idx(n_elems);
 		OMP_PARALLEL
@@ -785,7 +803,7 @@ private:
 	void show_normal_error_statistics(const TriMesh &mesh, const Matrix3X &target_normals, int bin_size_in_degrees, int n_bins)
 	{
 		// Compute the normal deviation angle, and the number of flipped normals
-		int n_faces = mesh.n_faces();
+		int n_faces = checked_int_count(mesh.n_faces(), "face count");
 		Eigen::VectorXd face_normal_error_angle(n_faces);
 
 		for(int i = 0; i < n_faces; ++ i)
