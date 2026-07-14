@@ -2,7 +2,8 @@ enum VertexUpdate {
     static func run(
         mesh: NativeMesh,
         targetNormals: [SIMD3<Float>],
-        parameters: NativeDenoiseParameters
+        parameters: NativeDenoiseParameters,
+        shouldCancel: (@Sendable () -> Bool)? = nil
     ) throws -> [SIMD3<Float>] {
         guard targetNormals.count == mesh.triangles.count, parameters.isValid else {
             throw NativeDenoiseError.invalidInput
@@ -16,6 +17,7 @@ enum VertexUpdate {
         var positions = originalPositions
 
         for _ in 0..<parameters.meshUpdateIterations {
+            guard shouldCancel?() != true else { throw NativeDenoiseError.cancelled }
             var rhs = originalPositions.map { $0 * closenessWeight }
 
             for (faceIndex, triangle) in mesh.triangles.enumerated() {
@@ -48,7 +50,8 @@ enum VertexUpdate {
             positions = try solveSystem(
                 triangles: mesh.triangles,
                 closenessWeight: closenessWeight,
-                rhs: rhs
+                rhs: rhs,
+                shouldCancel: shouldCancel
             )
 
             if parameters.meshUpdateDisplacementEps > 0 {
@@ -145,22 +148,26 @@ enum VertexUpdate {
     private static func solveSystem(
         triangles: [SIMD3<UInt32>],
         closenessWeight: Double,
-        rhs: [SIMD3<Double>]
+        rhs: [SIMD3<Double>],
+        shouldCancel: (@Sendable () -> Bool)?
     ) throws -> [SIMD3<Double>] {
         let x = try solveScalarSystem(
             triangles: triangles,
             closenessWeight: closenessWeight,
-            rhs: rhs.map(\.x)
+            rhs: rhs.map(\.x),
+            shouldCancel: shouldCancel
         )
         let y = try solveScalarSystem(
             triangles: triangles,
             closenessWeight: closenessWeight,
-            rhs: rhs.map(\.y)
+            rhs: rhs.map(\.y),
+            shouldCancel: shouldCancel
         )
         let z = try solveScalarSystem(
             triangles: triangles,
             closenessWeight: closenessWeight,
-            rhs: rhs.map(\.z)
+            rhs: rhs.map(\.z),
+            shouldCancel: shouldCancel
         )
 
         return rhs.indices.map { SIMD3<Double>(x[$0], y[$0], z[$0]) }
@@ -169,7 +176,8 @@ enum VertexUpdate {
     private static func solveScalarSystem(
         triangles: [SIMD3<UInt32>],
         closenessWeight: Double,
-        rhs: [Double]
+        rhs: [Double],
+        shouldCancel: (@Sendable () -> Bool)?
     ) throws -> [Double] {
         var x = [Double](repeating: 0, count: rhs.count)
         var r = rhs
@@ -182,7 +190,10 @@ enum VertexUpdate {
             return x
         }
 
-        for _ in 0..<maxIterations {
+        for iteration in 0..<maxIterations {
+            if iteration.isMultiple(of: 16), shouldCancel?() == true {
+                throw NativeDenoiseError.cancelled
+            }
             let ap = applySystem(
                 vector: p,
                 triangles: triangles,

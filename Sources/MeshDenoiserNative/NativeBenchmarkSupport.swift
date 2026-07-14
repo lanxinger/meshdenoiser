@@ -61,7 +61,7 @@ public enum NativeBenchmarkSupport {
             etaPrime: etaPrime,
             parameters: parameters
         )
-        return FilterCPU.run(
+        return try FilterCPU.run(
             initialSignals: connectivity.faceGeometry.normals,
             areaWeights: connectivity.faceGeometry.areaWeights,
             precompute: precompute,

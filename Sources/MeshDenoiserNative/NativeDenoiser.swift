@@ -12,9 +12,11 @@ public enum NativeDenoiser {
         indices: [UInt32],
         parameters: NativeDenoiseParameters,
         useGPU: Bool,
+        shouldCancel: (@Sendable () -> Bool)? = nil,
         progress: (@Sendable (Int, Int) -> Bool)?
     ) throws -> [SIMD3<Float>] {
         guard parameters.isValid else { throw NativeDenoiseError.invalidParameters }
+        try checkCancellation(shouldCancel)
 
         var mesh = try MeshValidation.makeMesh(positions: positions, indices: indices)
         let normalized = try MeshNormalization.normalize(mesh.positions)
@@ -24,8 +26,10 @@ public enum NativeDenoiser {
         let totalProgressStages = max(parameters.outerIterations * stagesPerOuterIteration, 1)
 
         for outerIteration in 0..<parameters.outerIterations {
+            try checkCancellation(shouldCancel)
             let progressBase = outerIteration * stagesPerOuterIteration
             let connectivity = try MeshConnectivity.build(mesh: mesh)
+            try checkCancellation(shouldCancel)
             let guidanceNormals = GuidanceNormals.compute(connectivity: connectivity)
             let etaPrime = Float(parameters.eta) * connectivity.averageNeighborFaceCentroidDistance
             try reportProgress(progressBase + 1, total: totalProgressStages, progress: progress)
@@ -38,14 +42,16 @@ public enum NativeDenoiser {
                     initialNormals: connectivity.faceGeometry.normals,
                     areaWeights: connectivity.faceGeometry.areaWeights,
                     etaPrime: etaPrime,
-                    parameters: parameters
+                    parameters: parameters,
+                    shouldCancel: shouldCancel
                 )
                 try reportProgress(progressBase + 2, total: totalProgressStages, progress: progress)
                 filteredNormals = try FilterGPU.run(
                     initialSignals: connectivity.faceGeometry.normals,
                     areaWeights: connectivity.faceGeometry.areaWeights,
                     precompute: &precompute,
-                    nu: Float(parameters.nu)
+                    nu: Float(parameters.nu),
+                    shouldCancel: shouldCancel
                 ).signals
             } else {
                 let precompute = try FilterPrecompute.buildForCPU(
@@ -54,14 +60,16 @@ public enum NativeDenoiser {
                     initialNormals: connectivity.faceGeometry.normals,
                     areaWeights: connectivity.faceGeometry.areaWeights,
                     etaPrime: etaPrime,
-                    parameters: parameters
+                    parameters: parameters,
+                    shouldCancel: shouldCancel
                 )
                 try reportProgress(progressBase + 2, total: totalProgressStages, progress: progress)
-                filteredNormals = FilterCPU.run(
+                filteredNormals = try FilterCPU.run(
                     initialSignals: connectivity.faceGeometry.normals,
                     areaWeights: connectivity.faceGeometry.areaWeights,
                     precompute: precompute,
-                    nu: Float(parameters.nu)
+                    nu: Float(parameters.nu),
+                    shouldCancel: shouldCancel
                 ).signals
             }
             try reportProgress(progressBase + 3, total: totalProgressStages, progress: progress)
@@ -69,7 +77,8 @@ public enum NativeDenoiser {
             mesh.positions = try VertexUpdate.run(
                 mesh: mesh,
                 targetNormals: filteredNormals,
-                parameters: parameters
+                parameters: parameters,
+                shouldCancel: shouldCancel
             )
 
             try reportProgress(progressBase + 4, total: totalProgressStages, progress: progress)
@@ -86,5 +95,9 @@ public enum NativeDenoiser {
         guard progress?(completed, total) ?? true else {
             throw NativeDenoiseError.cancelled
         }
+    }
+
+    private static func checkCancellation(_ shouldCancel: (@Sendable () -> Bool)?) throws {
+        guard shouldCancel?() != true else { throw NativeDenoiseError.cancelled }
     }
 }

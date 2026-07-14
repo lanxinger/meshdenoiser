@@ -93,12 +93,14 @@ public enum MeshDenoiser {
                         positions: positions,
                         indices: indices,
                         parameters: native,
-                        useGPU: useGPU
-                    ) { completed, total in
-                        if session.isCancelled { return false }
-                        session.progressHandler?(Double(completed) / Double(total))
-                        return true
-                    },
+                        useGPU: useGPU,
+                        shouldCancel: { session.isCancelled },
+                        progress: { completed, total in
+                            if session.isCancelled { return false }
+                            session.progressHandler?(Double(completed) / Double(total))
+                            return true
+                        }
+                    ),
                     originalPositions: positions
                 )
             } catch NativeDenoiseError.cancelled {

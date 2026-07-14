@@ -13,15 +13,22 @@ public struct NativeDenoiseParameters: Sendable, Equatable {
     public init() {}
 
     var isValid: Bool {
-        lambda > 0 && eta > 0 && mu > 0 && nu > 0
+        let filterParameters = [lambda, eta, mu, nu]
+        return filterParameters.allSatisfy { value in
+            let nativeValue = Float(value)
+            return value.isFinite && value > 0 && nativeValue.isFinite && nativeValue > 0
+        }
+            && meshUpdateClosenessWeight.isFinite
             && meshUpdateClosenessWeight >= 0
+            && Int32(exactly: meshUpdateIterations) != nil
             && meshUpdateIterations > 0
             && meshUpdateDisplacementEps.isFinite
+            && Int32(exactly: outerIterations) != nil
             && outerIterations > 0
     }
 }
 
-public enum NativeDenoiseError: Error, Equatable {
+public enum NativeDenoiseError: Error, Sendable, Equatable {
     case invalidInput
     case invalidParameters
     case solverFailed

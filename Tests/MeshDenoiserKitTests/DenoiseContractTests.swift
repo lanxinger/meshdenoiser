@@ -72,6 +72,24 @@ final class DenoiseContractTests: XCTestCase {
         }
     }
 
+    func testInfiniteParameterThrowsInvalidParameters() async {
+        let (positions, indices) = Self.noisyOctahedron()
+        var params = MeshDenoiseParameters()
+        params.lambda = .infinity
+        await assertThrows(MeshDenoiseError.invalidParameters) {
+            _ = try await MeshDenoiser.denoise(positions: positions, indices: indices, parameters: params)
+        }
+    }
+
+    func testIterationCountOutsideCIntRangeThrowsInvalidParameters() async {
+        let (positions, indices) = Self.noisyOctahedron()
+        var params = MeshDenoiseParameters()
+        params.meshUpdateIterations = Int(Int32.max) + 1
+        await assertThrows(MeshDenoiseError.invalidParameters) {
+            _ = try await MeshDenoiser.denoise(positions: positions, indices: indices, parameters: params)
+        }
+    }
+
     func testDenoiseErrorsHaveLocalizedDescriptionsAndAreSendable() {
         assertSendable(MeshDenoiseError.self)
 

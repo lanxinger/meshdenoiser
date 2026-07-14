@@ -71,6 +71,18 @@ final class NativeValidationTests: XCTestCase {
         params = NativeDenoiseParameters()
         params.meshUpdateDisplacementEps = -0.1
         XCTAssertTrue(params.isValid)
+
+        params = NativeDenoiseParameters()
+        params.nu = .infinity
+        XCTAssertFalse(params.isValid)
+
+        params = NativeDenoiseParameters()
+        params.eta = Double.leastNonzeroMagnitude
+        XCTAssertFalse(params.isValid)
+
+        params = NativeDenoiseParameters()
+        params.outerIterations = Int(Int32.max) + 1
+        XCTAssertFalse(params.isValid)
     }
 
     func testNormalizeRejectsZeroScaleMesh() {

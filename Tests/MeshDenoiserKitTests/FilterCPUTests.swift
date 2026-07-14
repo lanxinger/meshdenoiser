@@ -17,7 +17,7 @@ final class FilterCPUTests: XCTestCase {
             parameters: params
         )
 
-        let result = FilterCPU.run(
+        let result = try FilterCPU.run(
             initialSignals: initialSignals,
             areaWeights: areaWeights,
             precompute: precompute,
@@ -45,7 +45,7 @@ final class FilterCPUTests: XCTestCase {
         )
         precompute.faceNeighborRows = CSRAdjacency(offsets: [], values: [])
 
-        let result = FilterCPU.run(
+        let result = try FilterCPU.run(
             initialSignals: initialSignals,
             areaWeights: areaWeights,
             precompute: precompute,
@@ -55,5 +55,29 @@ final class FilterCPUTests: XCTestCase {
 
         XCTAssertEqual(result.signals.count, initialSignals.count)
         XCTAssertTrue(result.signals.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
+    }
+
+    func testCancellationStopsBeforeFiltering() throws {
+        let initialSignals = [SIMD3<Float>(0, 0, 1), SIMD3<Float>(0, 1, 0)]
+        let areaWeights: [Float] = [1, 1]
+        let params = NativeDenoiseParameters()
+        let precompute = try FilterPrecompute.build(
+            pairs: [NeighborPair(face0: 0, face1: 1, distance: 0.25)],
+            guidanceNormals: initialSignals,
+            initialNormals: initialSignals,
+            areaWeights: areaWeights,
+            etaPrime: 1,
+            parameters: params
+        )
+
+        XCTAssertThrowsError(try FilterCPU.run(
+            initialSignals: initialSignals,
+            areaWeights: areaWeights,
+            precompute: precompute,
+            nu: Float(params.nu),
+            shouldCancel: { true }
+        )) { error in
+            XCTAssertEqual(error as? NativeDenoiseError, .cancelled)
+        }
     }
 }

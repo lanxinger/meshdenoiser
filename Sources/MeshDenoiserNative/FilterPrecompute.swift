@@ -124,7 +124,8 @@ struct FilterPrecompute: Sendable {
         initialNormals: [SIMD3<Float>],
         areaWeights: [Float],
         etaPrime: Float,
-        parameters: NativeDenoiseParameters
+        parameters: NativeDenoiseParameters,
+        shouldCancel: (@Sendable () -> Bool)? = nil
     ) throws -> FilterPrecompute {
         guard centroids.count == initialNormals.count,
               guidanceNormals.count == initialNormals.count,
@@ -142,7 +143,11 @@ struct FilterPrecompute: Sendable {
             storesPairs: true
         )
 
-        try NeighborSearch.forEachPair(centroids: centroids, radius: 3 * etaPrime) { pair in
+        try NeighborSearch.forEachPair(
+            centroids: centroids,
+            radius: 3 * etaPrime,
+            shouldCancel: shouldCancel
+        ) { pair in
             try append(
                 pair: pair,
                 guidanceNormals: guidanceNormals,
@@ -168,7 +173,8 @@ struct FilterPrecompute: Sendable {
         initialNormals: [SIMD3<Float>],
         areaWeights: [Float],
         etaPrime: Float,
-        parameters: NativeDenoiseParameters
+        parameters: NativeDenoiseParameters,
+        shouldCancel: (@Sendable () -> Bool)? = nil
     ) throws -> FilterPrecompute {
         guard centroids.count == initialNormals.count,
               guidanceNormals.count == initialNormals.count,
@@ -180,13 +186,18 @@ struct FilterPrecompute: Sendable {
             throw NativeDenoiseError.invalidInput
         }
 
+        let neighborGrid = try NeighborSearch.Grid(
+            centroids: centroids,
+            radius: 3 * etaPrime,
+            shouldCancel: shouldCancel
+        )
         var accumulation = Accumulation(
             faceCount: initialNormals.count,
             estimatedPairCount: centroids.count * 12,
             storesPairs: false
         )
 
-        try NeighborSearch.forEachPair(centroids: centroids, radius: 3 * etaPrime) { pair in
+        try neighborGrid.forEachPair(shouldCancel: shouldCancel) { pair in
             try append(
                 pair: pair,
                 guidanceNormals: guidanceNormals,
@@ -204,9 +215,9 @@ struct FilterPrecompute: Sendable {
             parameters: parameters,
             faceNeighborRows: makeFaceNeighborRows(
                 faceCount: initialNormals.count,
-                centroids: centroids,
-                radius: 3 * etaPrime,
-                degree: accumulation.degree
+                grid: neighborGrid,
+                degree: accumulation.degree,
+                shouldCancel: shouldCancel
             )
         )
     }
@@ -334,9 +345,9 @@ struct FilterPrecompute: Sendable {
 
     private static func makeFaceNeighborRows(
         faceCount: Int,
-        centroids: [SIMD3<Float>],
-        radius: Float,
-        degree: [Int]
+        grid: NeighborSearch.Grid,
+        degree: [Int],
+        shouldCancel: (@Sendable () -> Bool)?
     ) throws -> CSRAdjacency<FaceNeighbor> {
         var offsets = [UInt32](repeating: 0, count: faceCount + 1)
         for face in 0..<faceCount {
@@ -350,7 +361,7 @@ struct FilterPrecompute: Sendable {
         var cursor = offsets
         var pairIndex: UInt32 = 0
 
-        let pairCount = try NeighborSearch.forEachPair(centroids: centroids, radius: radius) { pair in
+        let pairCount = try grid.forEachPair(shouldCancel: shouldCancel) { pair in
             let face0 = Int(pair.face0)
             let face1 = Int(pair.face1)
 

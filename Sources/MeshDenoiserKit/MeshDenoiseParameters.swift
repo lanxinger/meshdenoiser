@@ -6,18 +6,21 @@ public struct MeshDenoiseParameters: Sendable, Equatable {
     public enum Backend: Sendable, Equatable, CaseIterable {
         /// Native CPU by default; use `.nativeGPU` explicitly for benchmarked GPU runs.
         case automatic
-        /// Native Metal implementation; throws `.gpuUnavailable` without a Metal device.
+        /// Native Metal filter with a CPU conjugate-gradient vertex update.
+        /// Throws `.gpuUnavailable` when its Metal pipeline cannot be created.
         case nativeGPU
-        /// Native CPU implementation.
+        /// Native CPU implementation with a conjugate-gradient vertex update.
         case nativeCPU
         /// Wrapped C++ implementation; current test oracle.
         case reference
     }
 
     public enum LinearSolver: Int32, Sendable {
-        /// Iterative conjugate gradient — lower memory, use for very large meshes (>~500k vertices).
+        /// Iterative conjugate gradient for the reference backend.
+        /// Native backends always use their built-in conjugate-gradient vertex update.
         case conjugateGradient = 0
-        /// Direct sparse Cholesky (default) — fastest for typical mesh sizes.
+        /// Direct sparse Cholesky for the reference backend (default).
+        /// Native backends always use their built-in conjugate-gradient vertex update.
         case ldlt = 1
     }
 
@@ -37,6 +40,7 @@ public struct MeshDenoiseParameters: Sendable, Equatable {
     public var meshUpdateDisplacementEps: Double = 0.1
     /// Number of full filtering passes. More = more smoothing. Must be > 0.
     public var outerIterations: Int = 1
+    /// Reference-backend solver. Native backends use their built-in conjugate-gradient update.
     public var linearSolver: LinearSolver = .ldlt
     /// Forces single-threaded execution for bit-reproducible output.
     public var deterministic: Bool = false
@@ -46,10 +50,20 @@ public struct MeshDenoiseParameters: Sendable, Equatable {
     public init() {}
 
     var isValid: Bool {
-        lambda > 0 && eta > 0 && mu > 0 && nu > 0
+        let filterParameters = [lambda, eta, mu, nu]
+        let nativeFilterParametersAreRepresentable = filterParameters.allSatisfy { value in
+            let nativeValue = Float(value)
+            return nativeValue.isFinite && nativeValue > 0
+        }
+
+        return filterParameters.allSatisfy { $0.isFinite && $0 > 0 }
+            && (backend == .reference || nativeFilterParametersAreRepresentable)
+            && meshUpdateClosenessWeight.isFinite
             && meshUpdateClosenessWeight >= 0
+            && Int32(exactly: meshUpdateIterations) != nil
             && meshUpdateIterations > 0
             && meshUpdateDisplacementEps.isFinite
+            && Int32(exactly: outerIterations) != nil
             && outerIterations > 0
     }
 
@@ -61,9 +75,9 @@ public struct MeshDenoiseParameters: Sendable, Equatable {
         c.mu = mu
         c.nu = nu
         c.mesh_update_closeness_weight = meshUpdateClosenessWeight
-        c.mesh_update_iterations = Int32(meshUpdateIterations)
+        c.mesh_update_iterations = Int32(exactly: meshUpdateIterations) ?? 0
         c.mesh_update_displacement_eps = meshUpdateDisplacementEps
-        c.outer_iterations = Int32(outerIterations)
+        c.outer_iterations = Int32(exactly: outerIterations) ?? 0
         c.linear_solver_type = linearSolver.rawValue
         c.deterministic = deterministic ? 1 : 0
         return c

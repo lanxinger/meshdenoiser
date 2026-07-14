@@ -50,7 +50,7 @@ final class GPUParityTests: XCTestCase {
         let meshData = DenoiseContractTests.noisyOctahedron()
         var input = try makeFilterInput(positions: meshData.positions, indices: meshData.indices)
 
-        let cpu = FilterCPU.run(
+        let cpu = try FilterCPU.run(
             initialSignals: input.connectivity.faceGeometry.normals,
             areaWeights: input.connectivity.faceGeometry.areaWeights,
             precompute: input.precompute,
@@ -82,7 +82,7 @@ final class GPUParityTests: XCTestCase {
         let positions = fixture.positions.map { SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z)) }
         var input = try makeFilterInput(positions: positions, indices: fixture.indices)
 
-        let cpu = FilterCPU.run(
+        let cpu = try FilterCPU.run(
             initialSignals: input.connectivity.faceGeometry.normals,
             areaWeights: input.connectivity.faceGeometry.areaWeights,
             precompute: input.precompute,
@@ -106,6 +106,27 @@ final class GPUParityTests: XCTestCase {
         XCTAssertTrue(input.precompute.weightedInitialSignals.isEmpty)
         XCTAssertTrue(input.precompute.faceNeighborRows.offsets.isEmpty)
         XCTAssertTrue(input.precompute.faceNeighborRows.values.isEmpty)
+    }
+
+    func testMetalCancellationStopsBeforeConsumingPrecompute() throws {
+        guard FilterGPU.isAvailable else {
+            throw XCTSkip("Metal is not available on this host")
+        }
+
+        let meshData = DenoiseContractTests.noisyOctahedron()
+        var input = try makeFilterInput(positions: meshData.positions, indices: meshData.indices)
+        let originalPairCount = input.precompute.pairs.count
+
+        XCTAssertThrowsError(try FilterGPU.run(
+            initialSignals: input.connectivity.faceGeometry.normals,
+            areaWeights: input.connectivity.faceGeometry.areaWeights,
+            precompute: &input.precompute,
+            nu: Float(NativeDenoiseParameters().nu),
+            shouldCancel: { true }
+        )) { error in
+            XCTAssertEqual(error as? NativeDenoiseError, .cancelled)
+        }
+        XCTAssertEqual(input.precompute.pairs.count, originalPairCount)
     }
 
     private func makeFilterInput(

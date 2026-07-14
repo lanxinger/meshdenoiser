@@ -1,6 +1,11 @@
 enum MeshValidation {
     static func makeMesh(positions: [SIMD3<Float>], indices: [UInt32]) throws -> NativeMesh {
-        guard !positions.isEmpty, !indices.isEmpty, indices.count.isMultiple(of: 3) else {
+        guard !positions.isEmpty,
+              positions.count <= UInt32.max,
+              !indices.isEmpty,
+              indices.count.isMultiple(of: 3),
+              indices.count / 3 <= UInt32.max
+        else {
             throw NativeDenoiseError.invalidInput
         }
 

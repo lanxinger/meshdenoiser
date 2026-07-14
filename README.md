@@ -145,8 +145,8 @@ Swift backend selection:
 | Backend | Status |
 |---------|--------|
 | `.reference` | Default C++/OpenMesh/Eigen backend; exact golden parity target |
-| `.nativeCPU` | Native Swift pipeline with CPU fixed-point filter and CPU vertex update |
-| `.nativeGPU` | Native Swift pipeline with Metal fixed-point filter; preprocessing and vertex update stay on CPU |
+| `.nativeCPU` | Native Swift pipeline with CPU fixed-point filter and built-in conjugate-gradient vertex update |
+| `.nativeGPU` | Native Swift pipeline with Metal fixed-point filter; preprocessing and the built-in conjugate-gradient vertex update stay on CPU |
 | `.automatic` | Uses native CPU by default; explicit `.nativeGPU` is available for benchmarked GPU runs |
 
 The native backends are under active parity/performance validation. Keep `.reference`
@@ -257,7 +257,7 @@ The defaults are tuned for detail-preserving cleanup. Generate a commented templ
 | `MeshUpdateDisplacementEps` | 0.1 | Early-stop threshold for mesh update RMS displacement (<=0 disables) |
 | `OuterIterations` | 1 | Number of full filtering passes. More = more smoothing |
 | `DeterministicMode` | 0 | Force single-threaded execution (0/1) |
-| `LinearSolverType` | 1 | 0=CG, 1=Eigen LDLT, 2=CHOLMOD (falls back to 1 if unavailable) |
+| `LinearSolverType` | 1 | Reference backend only: 0=CG, 1=Eigen LDLT, 2=CHOLMOD (falls back to 1 if unavailable). Native backends use their built-in CG vertex update. |
 
 ## Dependencies
 

@@ -2,8 +2,41 @@ import Foundation
 import Metal
 
 enum FilterGPU {
+    private final class Context: @unchecked Sendable {
+        let device: MTLDevice
+        let commandQueue: MTLCommandQueue
+        let gatherReductionPipeline: MTLComputePipelineState
+        let reductionPipeline: MTLComputePipelineState
+
+        init?() {
+            guard let device = MTLCreateSystemDefaultDevice(),
+                  let commandQueue = device.makeCommandQueue(),
+                  let url = Bundle.module.url(forResource: "FilterKernels", withExtension: "metal"),
+                  let source = try? String(contentsOf: url, encoding: .utf8),
+                  let library = try? device.makeLibrary(source: source, options: nil),
+                  let gatherReductionFunction = library.makeFunction(
+                    name: "gather_filter_signals_and_reduce_displacement"
+                  ),
+                  let reductionFunction = library.makeFunction(name: "reduce_displacement"),
+                  let gatherReductionPipeline = try? device.makeComputePipelineState(
+                    function: gatherReductionFunction
+                  ),
+                  let reductionPipeline = try? device.makeComputePipelineState(function: reductionFunction)
+            else {
+                return nil
+            }
+
+            self.device = device
+            self.commandQueue = commandQueue
+            self.gatherReductionPipeline = gatherReductionPipeline
+            self.reductionPipeline = reductionPipeline
+        }
+    }
+
+    private static let sharedContext = Context()
+
     static var isAvailable: Bool {
-        MTLCreateSystemDefaultDevice() != nil
+        sharedContext != nil
     }
 
     static func faceNeighborRowsUseMetalUInt2LayoutForTesting() -> Bool {
@@ -33,8 +66,7 @@ enum FilterGPU {
         current: [SIMD3<Float>],
         areaWeights: [Float]
     ) throws -> Float {
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let commandQueue = device.makeCommandQueue(),
+        guard let context = sharedContext,
               previous.count == current.count,
               current.count == areaWeights.count,
               !current.isEmpty
@@ -42,24 +74,19 @@ enum FilterGPU {
             throw NativeDenoiseError.solverFailed
         }
 
-        let library = try makeLibrary(device: device)
-        guard let reductionFunction = library.makeFunction(name: "reduce_displacement") else {
-            throw NativeDenoiseError.solverFailed
-        }
-        let reductionPipeline = try device.makeComputePipelineState(function: reductionFunction)
-        let width = reductionThreadgroupWidth(for: reductionPipeline)
+        let width = reductionThreadgroupWidth(for: context.reductionPipeline)
         let partialCount = partialDisplacementCount(faceCount: current.count, threadgroupWidth: width)
 
         let previousSignals = previous.map { SIMD4<Float>($0.x, $0.y, $0.z, 0) }
         let currentSignals = current.map { SIMD4<Float>($0.x, $0.y, $0.z, 0) }
-        guard let previousBuffer = makeBuffer(device: device, values: previousSignals),
-              let currentBuffer = makeBuffer(device: device, values: currentSignals),
-              let areaWeightBuffer = makeBuffer(device: device, values: areaWeights),
-              let partialBuffer = device.makeBuffer(
+        guard let previousBuffer = makeBuffer(device: context.device, values: previousSignals),
+              let currentBuffer = makeBuffer(device: context.device, values: currentSignals),
+              let areaWeightBuffer = makeBuffer(device: context.device, values: areaWeights),
+              let partialBuffer = context.device.makeBuffer(
                 length: partialCount * MemoryLayout<Float>.stride,
                 options: [.storageModeShared]
               ),
-              let commandBuffer = commandQueue.makeCommandBuffer(),
+              let commandBuffer = context.commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder()
         else {
             throw NativeDenoiseError.solverFailed
@@ -67,7 +94,7 @@ enum FilterGPU {
 
         encodeReduction(
             encoder,
-            pipeline: reductionPipeline,
+            pipeline: context.reductionPipeline,
             previousBuffer: previousBuffer,
             currentBuffer: currentBuffer,
             areaWeightBuffer: areaWeightBuffer,
@@ -88,28 +115,22 @@ enum FilterGPU {
         areaWeights: [Float],
         precompute: inout FilterPrecompute,
         nu: Float,
-        maxIterations: Int = 100
+        maxIterations: Int = 100,
+        shouldCancel: (@Sendable () -> Bool)? = nil
     ) throws -> (signals: [SIMD3<Float>], iterations: Int, converged: Bool) {
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let commandQueue = device.makeCommandQueue(),
+        guard shouldCancel?() != true else { throw NativeDenoiseError.cancelled }
+        guard let context = sharedContext,
               !initialSignals.isEmpty,
               initialSignals.count == areaWeights.count,
+              initialSignals.count <= UInt32.max,
               nu.isFinite,
-              nu > 0
+              nu > 0,
+              maxIterations > 0
         else {
             throw NativeDenoiseError.solverFailed
         }
 
-        let library = try makeLibrary(device: device)
-        guard let gatherFunction = library.makeFunction(name: "gather_filter_signals"),
-              let reductionFunction = library.makeFunction(name: "reduce_displacement")
-        else {
-            throw NativeDenoiseError.solverFailed
-        }
-
-        let gatherPipeline = try device.makeComputePipelineState(function: gatherFunction)
-        let reductionPipeline = try device.makeComputePipelineState(function: reductionFunction)
-        let reductionWidth = reductionThreadgroupWidth(for: reductionPipeline)
+        let reductionWidth = reductionThreadgroupWidth(for: context.gatherReductionPipeline)
         let partialCount = partialDisplacementCount(
             faceCount: initialSignals.count,
             threadgroupWidth: reductionWidth
@@ -119,42 +140,48 @@ enum FilterGPU {
         precompute.pairs.removeAll(keepingCapacity: false)
 
         guard let rowOffsetBuffer = makeBufferAndRelease(
-            device: device,
+            device: context.device,
             values: &precompute.faceNeighborRows.offsets
         ) else {
             throw NativeDenoiseError.solverFailed
         }
         guard let rowValueBuffer = makeBufferAndRelease(
-            device: device,
+            device: context.device,
             values: &precompute.faceNeighborRows.values
         ) else {
             throw NativeDenoiseError.solverFailed
         }
 
-        guard let staticWeightBuffer = makeBufferAndRelease(device: device, values: &precompute.staticWeights) else {
+        guard let staticWeightBuffer = makeBufferAndRelease(
+            device: context.device,
+            values: &precompute.staticWeights
+        ) else {
             throw NativeDenoiseError.solverFailed
         }
 
         var weightedInitial = precompute.weightedInitialSignals.map { SIMD4<Float>($0.x, $0.y, $0.z, 0) }
         precompute.weightedInitialSignals.removeAll(keepingCapacity: false)
-        guard let weightedInitialBuffer = makeBufferAndRelease(device: device, values: &weightedInitial) else {
+        guard let weightedInitialBuffer = makeBufferAndRelease(
+            device: context.device,
+            values: &weightedInitial
+        ) else {
             throw NativeDenoiseError.solverFailed
         }
 
         var signals = initialSignals.map { SIMD4<Float>($0.x, $0.y, $0.z, 0) }
-        guard let signalsBuffer = makeBufferAndRelease(device: device, values: &signals) else {
+        guard let signalsBuffer = makeBufferAndRelease(device: context.device, values: &signals) else {
             throw NativeDenoiseError.solverFailed
         }
 
-        guard let filteredBuffer = device.makeBuffer(
+        guard let filteredBuffer = context.device.makeBuffer(
             length: faceCount * MemoryLayout<SIMD4<Float>>.stride,
             options: [.storageModeShared]
         ) else {
             throw NativeDenoiseError.solverFailed
         }
 
-        guard let areaWeightBuffer = makeBuffer(device: device, values: areaWeights),
-              let partialDisplacementBuffer = device.makeBuffer(
+        guard let areaWeightBuffer = makeBuffer(device: context.device, values: areaWeights),
+              let partialDisplacementBuffer = context.device.makeBuffer(
                 length: partialCount * MemoryLayout<Float>.stride,
                 options: [.storageModeShared]
               )
@@ -169,41 +196,34 @@ enum FilterGPU {
         var latestBuffer = signalsBuffer
 
         for iteration in 1...maxIterations {
-            guard let commandBuffer = commandQueue.makeCommandBuffer(),
-                  let gatherEncoder = commandBuffer.makeComputeCommandEncoder()
+            guard shouldCancel?() != true else { throw NativeDenoiseError.cancelled }
+            guard let commandBuffer = context.commandQueue.makeCommandBuffer(),
+                  let encoder = commandBuffer.makeComputeCommandEncoder()
             else {
                 throw NativeDenoiseError.solverFailed
             }
 
-            gatherEncoder.setComputePipelineState(gatherPipeline)
-            gatherEncoder.setBuffer(inputBuffer, offset: 0, index: 0)
-            gatherEncoder.setBuffer(weightedInitialBuffer, offset: 0, index: 1)
-            gatherEncoder.setBuffer(rowOffsetBuffer, offset: 0, index: 2)
-            gatherEncoder.setBuffer(rowValueBuffer, offset: 0, index: 3)
-            gatherEncoder.setBuffer(staticWeightBuffer, offset: 0, index: 4)
-            gatherEncoder.setBuffer(outputBuffer, offset: 0, index: 5)
-            gatherEncoder.setBytes(&hDynamic, length: MemoryLayout<Float>.stride, index: 6)
-            dispatch(gatherEncoder, pipeline: gatherPipeline, count: faceCount)
-            gatherEncoder.endEncoding()
-
-            guard let reductionEncoder = commandBuffer.makeComputeCommandEncoder() else {
-                throw NativeDenoiseError.solverFailed
-            }
-            encodeReduction(
-                reductionEncoder,
-                pipeline: reductionPipeline,
-                previousBuffer: inputBuffer,
-                currentBuffer: outputBuffer,
+            encodeGatherAndReduction(
+                encoder,
+                pipeline: context.gatherReductionPipeline,
+                inputBuffer: inputBuffer,
+                weightedInitialBuffer: weightedInitialBuffer,
+                rowOffsetBuffer: rowOffsetBuffer,
+                rowValueBuffer: rowValueBuffer,
+                staticWeightBuffer: staticWeightBuffer,
                 areaWeightBuffer: areaWeightBuffer,
+                outputBuffer: outputBuffer,
                 partialBuffer: partialDisplacementBuffer,
+                hDynamic: &hDynamic,
                 faceCount: faceCount,
                 threadgroupWidth: reductionWidth
             )
-            reductionEncoder.endEncoding()
+            encoder.endEncoding()
 
             commandBuffer.commit()
             commandBuffer.waitUntilCompleted()
             guard commandBuffer.error == nil else { throw NativeDenoiseError.solverFailed }
+            guard shouldCancel?() != true else { throw NativeDenoiseError.cancelled }
 
             latestBuffer = outputBuffer
             let displacement = readPartialDisplacement(from: partialDisplacementBuffer, count: partialCount)
@@ -216,14 +236,6 @@ enum FilterGPU {
         }
 
         return (readFloat3Signals(from: latestBuffer, count: faceCount), maxIterations, false)
-    }
-
-    private static func makeLibrary(device: MTLDevice) throws -> MTLLibrary {
-        let url = Bundle.module.url(forResource: "FilterKernels", withExtension: "metal")
-        guard let url, let source = try? String(contentsOf: url, encoding: .utf8) else {
-            throw NativeDenoiseError.solverFailed
-        }
-        return try device.makeLibrary(source: source, options: nil)
     }
 
     private static func makeBuffer<T>(
@@ -249,15 +261,45 @@ enum FilterGPU {
         return buffer
     }
 
-    private static func dispatch(
+    private static func encodeGatherAndReduction(
         _ encoder: MTLComputeCommandEncoder,
         pipeline: MTLComputePipelineState,
-        count: Int
+        inputBuffer: MTLBuffer,
+        weightedInitialBuffer: MTLBuffer,
+        rowOffsetBuffer: MTLBuffer,
+        rowValueBuffer: MTLBuffer,
+        staticWeightBuffer: MTLBuffer,
+        areaWeightBuffer: MTLBuffer,
+        outputBuffer: MTLBuffer,
+        partialBuffer: MTLBuffer,
+        hDynamic: inout Float,
+        faceCount: Int,
+        threadgroupWidth: Int
     ) {
-        let width = max(1, min(pipeline.maxTotalThreadsPerThreadgroup, 256))
+        var count = UInt32(faceCount)
+        let partialCount = partialDisplacementCount(
+            faceCount: faceCount,
+            threadgroupWidth: threadgroupWidth
+        )
+
+        encoder.setComputePipelineState(pipeline)
+        encoder.setBuffer(inputBuffer, offset: 0, index: 0)
+        encoder.setBuffer(weightedInitialBuffer, offset: 0, index: 1)
+        encoder.setBuffer(rowOffsetBuffer, offset: 0, index: 2)
+        encoder.setBuffer(rowValueBuffer, offset: 0, index: 3)
+        encoder.setBuffer(staticWeightBuffer, offset: 0, index: 4)
+        encoder.setBuffer(areaWeightBuffer, offset: 0, index: 5)
+        encoder.setBuffer(outputBuffer, offset: 0, index: 6)
+        encoder.setBuffer(partialBuffer, offset: 0, index: 7)
+        encoder.setBytes(&hDynamic, length: MemoryLayout<Float>.stride, index: 8)
+        encoder.setBytes(&count, length: MemoryLayout<UInt32>.stride, index: 9)
+        encoder.setThreadgroupMemoryLength(
+            threadgroupWidth * MemoryLayout<Float>.stride,
+            index: 0
+        )
         encoder.dispatchThreads(
-            MTLSize(width: count, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1)
+            MTLSize(width: partialCount * threadgroupWidth, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: threadgroupWidth, height: 1, depth: 1)
         )
     }
 
