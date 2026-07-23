@@ -1,4 +1,10 @@
 enum VertexUpdate {
+    private struct FacePositions {
+        var first: SIMD3<Double>
+        var second: SIMD3<Double>
+        var third: SIMD3<Double>
+    }
+
     static func run(
         mesh: NativeMesh,
         targetNormals: [SIMD3<Float>],
@@ -21,13 +27,19 @@ enum VertexUpdate {
             var rhs = originalPositions.map { $0 * closenessWeight }
 
             for (faceIndex, triangle) in mesh.triangles.enumerated() {
-                let vertexIndices = [Int(triangle.x), Int(triangle.y), Int(triangle.z)]
-                let facePositions = vertexIndices.map { positions[$0] }
+                let firstIndex = Int(triangle.x)
+                let secondIndex = Int(triangle.y)
+                let thirdIndex = Int(triangle.z)
+                let facePositions = FacePositions(
+                    first: positions[firstIndex],
+                    second: positions[secondIndex],
+                    third: positions[thirdIndex]
+                )
                 let centered = meanCentered(facePositions)
                 let currentNormal = faceNormal(facePositions)
                 let targetNormal = normalized(toDouble(targetNormals[faceIndex]), fallback: currentNormal)
 
-                let targetPositions: [SIMD3<Double>]
+                let targetPositions: FacePositions
                 if dot(currentNormal, targetNormal) >= 0 {
                     targetPositions = projectToTargetPlane(
                         centeredPositions: centered,
@@ -41,9 +53,9 @@ enum VertexUpdate {
                 }
 
                 let centeredTargets = meanCentered(targetPositions)
-                for localIndex in 0..<3 {
-                    rhs[vertexIndices[localIndex]] += centeredTargets[localIndex]
-                }
+                rhs[firstIndex] += centeredTargets.first
+                rhs[secondIndex] += centeredTargets.second
+                rhs[thirdIndex] += centeredTargets.third
             }
 
             let previous = positions
@@ -102,6 +114,20 @@ enum VertexUpdate {
     }
 
     private static func projectToTargetPlane(
+        centeredPositions: FacePositions,
+        targetNormal: SIMD3<Double>
+    ) -> FacePositions {
+        FacePositions(
+            first: centeredPositions.first
+                - targetNormal * dot(targetNormal, centeredPositions.first),
+            second: centeredPositions.second
+                - targetNormal * dot(targetNormal, centeredPositions.second),
+            third: centeredPositions.third
+                - targetNormal * dot(targetNormal, centeredPositions.third)
+        )
+    }
+
+    private static func projectToTargetPlane(
         centeredPositions: [SIMD3<Double>],
         targetNormal: SIMD3<Double>
     ) -> [SIMD3<Double>] {
@@ -111,21 +137,31 @@ enum VertexUpdate {
     }
 
     private static func projectToPrincipalLine(
-        centeredPositions: [SIMD3<Double>],
+        centeredPositions: FacePositions,
         targetNormal: SIMD3<Double>
-    ) -> [SIMD3<Double>] {
+    ) -> FacePositions {
         let basis = targetPlaneBasis(normal: targetNormal)
         var xx = 0.0
         var xy = 0.0
         var yy = 0.0
 
-        for position in centeredPositions {
-            let x = dot(position, basis.u)
-            let y = dot(position, basis.v)
-            xx += x * x
-            xy += x * y
-            yy += y * y
-        }
+        var x = dot(centeredPositions.first, basis.u)
+        var y = dot(centeredPositions.first, basis.v)
+        xx += x * x
+        xy += x * y
+        yy += y * y
+
+        x = dot(centeredPositions.second, basis.u)
+        y = dot(centeredPositions.second, basis.v)
+        xx += x * x
+        xy += x * y
+        yy += y * y
+
+        x = dot(centeredPositions.third, basis.u)
+        y = dot(centeredPositions.third, basis.v)
+        xx += x * x
+        xy += x * y
+        yy += y * y
 
         let localDirection: SIMD2<Double>
         if abs(xy) <= 1e-14 {
@@ -142,7 +178,11 @@ enum VertexUpdate {
             basis.u * localDirection.x + basis.v * localDirection.y,
             fallback: basis.u
         )
-        return centeredPositions.map { direction * dot(direction, $0) }
+        return FacePositions(
+            first: direction * dot(direction, centeredPositions.first),
+            second: direction * dot(direction, centeredPositions.second),
+            third: direction * dot(direction, centeredPositions.third)
+        )
     }
 
     private static func solveSystem(
@@ -245,13 +285,20 @@ enum VertexUpdate {
         return result
     }
 
-    private static func meanCentered(_ positions: [SIMD3<Double>]) -> [SIMD3<Double>] {
-        let mean = positions.reduce(SIMD3<Double>(repeating: 0), +) / Double(positions.count)
-        return positions.map { $0 - mean }
+    private static func meanCentered(_ positions: FacePositions) -> FacePositions {
+        let mean = ((positions.first + positions.second) + positions.third) / 3
+        return FacePositions(
+            first: positions.first - mean,
+            second: positions.second - mean,
+            third: positions.third - mean
+        )
     }
 
-    private static func faceNormal(_ positions: [SIMD3<Double>]) -> SIMD3<Double> {
-        let normal = cross(positions[1] - positions[0], positions[2] - positions[0])
+    private static func faceNormal(_ positions: FacePositions) -> SIMD3<Double> {
+        let normal = cross(
+            positions.second - positions.first,
+            positions.third - positions.first
+        )
         return normalized(normal, fallback: SIMD3<Double>(0, 0, 1))
     }
 

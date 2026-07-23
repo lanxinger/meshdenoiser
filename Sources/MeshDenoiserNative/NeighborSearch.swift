@@ -3,7 +3,8 @@ import Foundation
 struct NeighborPair: Sendable, Equatable {
     var face0: UInt32
     var face1: UInt32
-    var distance: Float
+    /// Kept squared because filtering consumes squared distance directly.
+    var distanceSquared: Float
 }
 
 enum NeighborSearch {
@@ -99,7 +100,7 @@ enum NeighborSearch {
                                     try body(NeighborPair(
                                         face0: UInt32(face0),
                                         face1: UInt32(face1),
-                                        distance: distanceSquared.squareRoot()
+                                        distanceSquared: distanceSquared
                                     ))
                                     pairCount += 1
                                 }

@@ -6,7 +6,7 @@ final class FilterCPUTests: XCTestCase {
     func testIdenticalSignalsConvergeInOneIteration() throws {
         let initialSignals = [SIMD3<Float>(0, 0, 1), SIMD3<Float>(0, 0, 1)]
         let areaWeights: [Float] = [1, 1]
-        let pairs = [NeighborPair(face0: 0, face1: 1, distance: 0.25)]
+        let pairs = [NeighborPair(face0: 0, face1: 1, distanceSquared: 0.0625)]
         let params = NativeDenoiseParameters()
         let precompute = try FilterPrecompute.build(
             pairs: pairs,
@@ -33,7 +33,7 @@ final class FilterCPUTests: XCTestCase {
     func testFilterDoesNotRequireFaceNeighborRows() throws {
         let initialSignals = [SIMD3<Float>(0, 0, 1), SIMD3<Float>(0, 1, 0)]
         let areaWeights: [Float] = [1, 1]
-        let pairs = [NeighborPair(face0: 0, face1: 1, distance: 0.25)]
+        let pairs = [NeighborPair(face0: 0, face1: 1, distanceSquared: 0.0625)]
         let params = NativeDenoiseParameters()
         var precompute = try FilterPrecompute.build(
             pairs: pairs,
@@ -62,7 +62,7 @@ final class FilterCPUTests: XCTestCase {
         let areaWeights: [Float] = [1, 1]
         let params = NativeDenoiseParameters()
         let precompute = try FilterPrecompute.build(
-            pairs: [NeighborPair(face0: 0, face1: 1, distance: 0.25)],
+            pairs: [NeighborPair(face0: 0, face1: 1, distanceSquared: 0.0625)],
             guidanceNormals: initialSignals,
             initialNormals: initialSignals,
             areaWeights: areaWeights,

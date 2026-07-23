@@ -5,7 +5,7 @@ import XCTest
 final class FilterPrecomputeTests: XCTestCase {
 
     func testStaticWeightsAndLambdaRescaleMatchScalarFormula() throws {
-        let pairs = [NeighborPair(face0: 0, face1: 1, distance: 0.5)]
+        let pairs = [NeighborPair(face0: 0, face1: 1, distanceSquared: 0.25)]
         let guidance: [SIMD3<Float>] = [[0, 0, 1], [0, 1, 0]]
         let initial: [SIMD3<Float>] = [[0, 0, 1], [0, 1, 0]]
         let areaWeights: [Float] = [1.5, 0.5]
@@ -28,10 +28,10 @@ final class FilterPrecomputeTests: XCTestCase {
         let hSpatial = Float(-0.5) / (etaPrime * etaPrime)
         let hGuidance = Float(-0.5) / Float(params.mu * params.mu)
         let areaSum = areaWeights[0] + areaWeights[1]
-        let areaSpatial = areaSum * exp(hSpatial * pairs[0].distance * pairs[0].distance)
+        let areaSpatial = areaSum * exp(hSpatial * pairs[0].distanceSquared)
         let expectedStatic = areaSum * exp(
             hGuidance * lengthSquared(guidance[0] - guidance[1])
-                + hSpatial * pairs[0].distance * pairs[0].distance
+                + hSpatial * pairs[0].distanceSquared
         )
         let expectedLambda = Float(params.lambda) * areaWeights.reduce(0, +) / areaSpatial
         let expectedInitScale = Float(2 * params.nu * params.nu) / expectedLambda

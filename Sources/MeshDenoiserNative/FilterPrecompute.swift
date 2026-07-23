@@ -258,8 +258,7 @@ struct FilterPrecompute: Sendable {
         let hSpatial = Float(-0.5) / (etaPrime * etaPrime)
         let hGuidance = Float(-0.5) / (mu * mu)
         let areaSum = areaWeights[face0] + areaWeights[face1]
-        let distanceSquared = pair.distance * pair.distance
-        let spatialTerm = hSpatial * distanceSquared
+        let spatialTerm = hSpatial * pair.distanceSquared
         let areaSpatial = areaSum * Float(exp(Double(spatialTerm)))
         let guidanceDiff = guidanceNormals[face0] - guidanceNormals[face1]
         let guidanceTerm = hGuidance * lengthSquared(guidanceDiff)
