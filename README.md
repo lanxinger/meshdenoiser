@@ -239,7 +239,9 @@ default, accept `--input`, and print:
 mode,backend,vertices,faces,total_secs,peak_memory_mb,checksum
 ```
 
-Vendored dependencies (Eigen, OpenMesh Core) are pinned by `scripts/vendor_dependencies.sh`.
+Vendored dependencies are pinned by `scripts/vendor_dependencies.sh`. SwiftPM
+uses an immutable OpenMesh Core snapshot; the CMake CLI intentionally remains on
+the stable OpenMesh 11.0 release.
 
 ## Denoising Parameters
 
@@ -264,7 +266,8 @@ The defaults are tuned for detail-preserving cleanup. Generate a commented templ
 | Library | Version | Type | Notes |
 |---------|---------|------|-------|
 | **Eigen** | 3.3+ | Header-only | Must be findable via `find_package(Eigen3)` or `-DEIGEN3_INCLUDE_DIR=...` |
-| **OpenMesh** | 11.0 | Fetched automatically | Mesh data structure and traditional format I/O |
+| **OpenMesh (CMake CLI)** | 11.0 | Fetched automatically | Stable release used for mesh data and traditional format I/O |
+| **OpenMesh Core (SwiftPM)** | `cb4e9528` | Vendored | Immutable upstream snapshot used by the reference backend |
 | **tinygltf** | 2.9.7 | Fetched automatically | Header-only glTF 2.0 parser |
 | **tinyusdz** | 0.9.1 | Fetched automatically | USD format support |
 | **OpenMP** | — | Optional | Multi-threaded performance (auto-detected) |

@@ -8,7 +8,11 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 EIGEN_URL="https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
-OPENMESH_URL="https://www.graphics.rwth-aachen.de/media/openmesh_static/Releases/11.0/OpenMesh-11.0.0.tar.gz"
+# SwiftPM vendors this immutable Core snapshot. The CMake build remains pinned
+# separately to the stable OpenMesh 11.0 release.
+OPENMESH_REVISION="cb4e95287240faad1af58d45d525b97e0c65fdee"
+OPENMESH_SHA256="8b80cb41cc857e6c826c9085f4aee03ad453314ba738d361e165456061778b81"
+OPENMESH_URL="https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh/-/archive/$OPENMESH_REVISION/OpenMesh-$OPENMESH_REVISION.tar.gz"
 
 echo "Fetching Eigen..."
 curl -fsSL "$EIGEN_URL" -o "$TMP/eigen.tar.gz"
@@ -21,6 +25,7 @@ cp "$EIGEN_DIR"/COPYING.* "$ROOT/Vendor/eigen/" 2>/dev/null || true
 
 echo "Fetching OpenMesh..."
 curl -fsSL "$OPENMESH_URL" -o "$TMP/openmesh.tar.gz"
+printf '%s  %s\n' "$OPENMESH_SHA256" "$TMP/openmesh.tar.gz" | shasum -a 256 -c -
 tar -xzf "$TMP/openmesh.tar.gz" -C "$TMP"
 OM_DIR="$(echo "$TMP"/OpenMesh-*)"
 OM_CORE="$OM_DIR/src/OpenMesh/Core"
