@@ -34,7 +34,7 @@ FetchContent_Declare(
   tinygltf
   URL "${_TINYGLTF_URL}"
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-  URL_HASH SHA256=1015f306721257fdcee602c2995542232042b4feda2ebb2e0c323c7d769ccd0e
+  URL_HASH SHA256=865ae4a220ff8bebc455f098e7c08bcb9e2701ef9eaef3519e9cc05ffd824dc9
 )
 FetchContent_GetProperties(tinygltf)
 if(NOT tinygltf_POPULATED)
@@ -56,7 +56,7 @@ FetchContent_Declare(
   tinyusdz
   URL "${_TINYUSDZ_URL}"
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-  URL_HASH SHA256=0cdbb15147783b916fb4a487a283495d271724c101df3c98303de96a3ef1af66
+  URL_HASH SHA256=d31346550239c862cace6728214b60ec3842702f91ea02e537852d9388ec9bac
 )
 FetchContent_MakeAvailable(tinyusdz)
 
