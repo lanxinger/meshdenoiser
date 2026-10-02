@@ -1,0 +1,2 @@
+# Preserve upstream vendor sources, including their whitespace.
+Vendor/eigen/** -whitespace
