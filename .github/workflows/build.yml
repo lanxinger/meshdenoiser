@@ -1,6 +1,7 @@
 name: Build Multi-Platform Binaries
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
   pull_request:
@@ -33,36 +34,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libeigen3-dev patchelf
+          sudo apt-get install -y build-essential cmake patchelf
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install cmake eigen
+          brew install cmake
 
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          vcpkg install
-
-      - name: Configure CMake (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Configure CMake
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-
-      - name: Configure CMake (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_TOOLCHAIN_FILE="${env:VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
         run: |
           cmake --build build --config ${{ matrix.build_type }} -j
+
+      - name: Verify CLI numerical parity
+        run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
 
       - name: Prepare artifacts (Linux/macOS)
         if: runner.os != 'Windows'

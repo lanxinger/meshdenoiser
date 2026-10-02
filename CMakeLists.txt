@@ -16,34 +16,17 @@ if(ENABLE_OPENMP)
   find_package(OpenMP QUIET)
 endif()
 
-# Eigen (required, header-only)
-find_package(Eigen3 3.3 QUIET)
-if(NOT TARGET Eigen3::Eigen)
-  # Retry without version constraint
-  find_package(Eigen3 QUIET)
+# Use the same pinned Eigen headers as SwiftPM unless explicitly overridden.
+if(NOT DEFINED EIGEN3_INCLUDE_DIR)
+  set(EIGEN3_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Vendor/eigen")
 endif()
-if(NOT TARGET Eigen3::Eigen)
-  # Try user-provided include dir
-  if(DEFINED EIGEN3_INCLUDE_DIR AND EXISTS "${EIGEN3_INCLUDE_DIR}")
-    set(_eigen_dir "${EIGEN3_INCLUDE_DIR}")
-  else()
-    # Probe common system locations
-    find_path(_eigen_dir NAMES Eigen/Dense
-      PATHS /usr/include/eigen3 /usr/local/include/eigen3 /opt/homebrew/include/eigen3
-      NO_DEFAULT_PATH)
-    if(NOT _eigen_dir)
-      find_path(_eigen_dir NAMES Eigen/Dense)
-    endif()
-  endif()
-  if(_eigen_dir)
-    message(STATUS "Using Eigen from ${_eigen_dir}")
-    add_library(Eigen3::Eigen INTERFACE IMPORTED)
-    set_target_properties(Eigen3::Eigen PROPERTIES
-      INTERFACE_INCLUDE_DIRECTORIES "${_eigen_dir}")
-  else()
-    message(FATAL_ERROR "Eigen3 not found. Install via system package manager or set -DEIGEN3_INCLUDE_DIR=...")
-  endif()
+if(NOT EXISTS "${EIGEN3_INCLUDE_DIR}/Eigen/Dense")
+  message(FATAL_ERROR "Eigen headers not found in EIGEN3_INCLUDE_DIR=${EIGEN3_INCLUDE_DIR}")
 endif()
+message(STATUS "Using Eigen from ${EIGEN3_INCLUDE_DIR}")
+add_library(Eigen3::Eigen INTERFACE IMPORTED)
+set_target_properties(Eigen3::Eigen PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
 
 # Fetch OpenMesh, tinygltf, tinyusdz, and optionally detect CHOLMOD
 include(FetchDependencies)
@@ -59,6 +42,15 @@ if(MSVC AND USE_STATIC_MSVC_RUNTIME)
       string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
     endif()
   endforeach()
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME cli_parity
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_cli.py"
+      --executable "$<TARGET_FILE:MeshDenoiser>"
+      --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/Tests/MeshDenoiserKitTests/Fixtures")
 endif()
 
 # ---------- MeshDenoiser executable ----------

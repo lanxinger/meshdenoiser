@@ -265,7 +265,7 @@ The defaults are tuned for detail-preserving cleanup. Generate a commented templ
 
 | Library | Version | Type | Notes |
 |---------|---------|------|-------|
-| **Eigen** | 3.3+ | Header-only | Must be findable via `find_package(Eigen3)` or `-DEIGEN3_INCLUDE_DIR=...` |
+| **Eigen** | 3.4.1 | Vendored, header-only | Shared by CMake and SwiftPM; override CLI headers with `-DEIGEN3_INCLUDE_DIR=...` |
 | **OpenMesh (CMake CLI)** | 11.0 | Fetched automatically | Stable release used for mesh data and traditional format I/O |
 | **OpenMesh Core (SwiftPM)** | `cb4e9528` | Vendored | Immutable upstream snapshot used by the reference backend |
 | **tinygltf** | 2.9.7 | Fetched automatically | Header-only glTF 2.0 parser |
@@ -277,27 +277,29 @@ The defaults are tuned for detail-preserving cleanup. Generate a commented templ
 
 ### Linux (Ubuntu/Debian)
 ```bash
-sudo apt-get update && sudo apt-get install -y build-essential cmake libeigen3-dev
+sudo apt-get update && sudo apt-get install -y build-essential cmake
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+ctest --test-dir build --output-on-failure
 ./build/MeshDenoiser --help
 ```
 
 ### macOS
 ```bash
-brew update && brew install cmake eigen
+brew update && brew install cmake
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+ctest --test-dir build --output-on-failure
 ./build/MeshDenoiser --help
 ```
 
 For OpenMP on macOS, install `gcc` and configure with `-DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14`.
 
-### Windows (MSVC + vcpkg)
+### Windows (MSVC)
 ```powershell
-vcpkg install eigen3
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="C:/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake"
+cmake -S . -B build
 cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
 ```
 
 ## Input Format Notes

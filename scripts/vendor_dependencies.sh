@@ -7,7 +7,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-EIGEN_URL="https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
+EIGEN_URL="https://gitlab.com/libeigen/eigen/-/archive/3.4.1/eigen-3.4.1.tar.gz"
+EIGEN_SHA256="b93c667d1b69265cdb4d9f30ec21f8facbbe8b307cf34c0b9942834c6d4fdbe2"
 # SwiftPM vendors this immutable Core snapshot. The CMake build remains pinned
 # separately to the stable OpenMesh 11.0 release.
 OPENMESH_REVISION="cb4e95287240faad1af58d45d525b97e0c65fdee"
@@ -16,6 +17,7 @@ OPENMESH_URL="https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh/-/archive
 
 echo "Fetching Eigen..."
 curl -fsSL "$EIGEN_URL" -o "$TMP/eigen.tar.gz"
+printf '%s  %s\n' "$EIGEN_SHA256" "$TMP/eigen.tar.gz" | shasum -a 256 -c -
 tar -xzf "$TMP/eigen.tar.gz" -C "$TMP"
 EIGEN_DIR="$(echo "$TMP"/eigen-*)"
 rm -rf "$ROOT/Vendor/eigen"
