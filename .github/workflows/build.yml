@@ -5,7 +5,6 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
   release:
     types: [ published ]
 
@@ -58,7 +57,7 @@ jobs:
         run: |
           cmake --build build --config ${{ matrix.build_type }} -j
 
-      - name: Verify CLI numerical parity
+      - name: Verify CLI golden parity and GLB fixtures
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
 
       - name: Prepare artifacts (Linux/macOS)
@@ -68,6 +67,7 @@ jobs:
           find build -name MeshDenoiser -type f -exec cp {} artifacts/ \;
           cp MeshDenoiserDefaults.txt artifacts/
           cp README.md artifacts/
+          cp -R LICENSES artifacts/
           chmod +x artifacts/MeshDenoiser
 
           # Bundle OpenMesh libraries and fix rpath
@@ -108,6 +108,7 @@ jobs:
           Get-ChildItem -Path build -Recurse -Filter MeshDenoiser.exe | ForEach-Object { Copy-Item $_.FullName -Destination artifacts\ }
           copy MeshDenoiserDefaults.txt artifacts\
           copy README.md artifacts\
+          Copy-Item LICENSES -Destination artifacts\LICENSES -Recurse
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(MeshDenoiser LANGUAGES CXX)
+project(MeshDenoiser LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,6 +30,11 @@ set_target_properties(Eigen3::Eigen PROPERTIES
 
 # Fetch OpenMesh, tinygltf, tinyusdz, and optionally detect CHOLMOD
 include(FetchDependencies)
+
+add_library(tinygltf_runtime STATIC "${tinygltf_SOURCE_DIR}/tiny_gltf_v3.c")
+set_target_properties(tinygltf_runtime PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+target_compile_definitions(tinygltf_runtime PRIVATE TINYGLTF3_ENABLE_FS)
+target_include_directories(tinygltf_runtime PUBLIC "${tinygltf_SOURCE_DIR}")
 
 # On MSVC, optionally link static runtime
 option(USE_STATIC_MSVC_RUNTIME "Link static MSVC runtime (/MT)" OFF)
@@ -81,6 +86,7 @@ target_include_directories(MeshDenoiser PRIVATE
 target_link_libraries(MeshDenoiser PRIVATE
   Eigen3::Eigen
   OpenMeshCore
+  tinygltf_runtime
   tinyusdz_static
 )
 

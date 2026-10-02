@@ -41,6 +41,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -53,11 +54,7 @@
 #include <omp.h>
 #endif
 
-#define TINYGLTF_IMPLEMENTATION
-#define TINYGLTF_NO_STB_IMAGE
-#define TINYGLTF_NO_STB_IMAGE_WRITE
-#define TINYGLTF_USE_CPP14
-#include <tiny_gltf.h>
+#include <tiny_gltf_v3.h>
 
 #include "tinyusdz.hh"
 #include "tydra/render-data.hh"
@@ -222,115 +219,128 @@ bool validate_mesh_vertices(const TriMesh &mesh)
 
 struct PrimitiveInstance
 {
-	const tinygltf::Primitive *primitive;
+	const tg3_primitive *primitive;
 	Eigen::Matrix4d transform;
 };
 
-Eigen::Matrix4d compose_transform(const tinygltf::Node &node)
+Eigen::Matrix4d compose_transform(const tg3_node &node)
 {
-	if(node.matrix.size() == 16){
+	if(node.has_matrix){
 		Eigen::Matrix4d mat;
 		for(int r = 0; r < 4; ++r){
 			for(int c = 0; c < 4; ++c){
-				mat(r, c) = node.matrix[c + 4 * r];
+				mat(r, c) = node.matrix[r + 4 * c];
 			}
 		}
 		return mat;
 	}
 
 	Eigen::Matrix4d translation = Eigen::Matrix4d::Identity();
-	if(node.translation.size() == 3){
-		translation(0, 3) = node.translation[0];
-		translation(1, 3) = node.translation[1];
-		translation(2, 3) = node.translation[2];
-	}
+	translation(0, 3) = node.translation[0];
+	translation(1, 3) = node.translation[1];
+	translation(2, 3) = node.translation[2];
 
 	Eigen::Matrix4d rotation = Eigen::Matrix4d::Identity();
-	if(node.rotation.size() == 4){
-		Eigen::Quaterniond q(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
-		q.normalize();
-		rotation.block<3,3>(0,0) = q.toRotationMatrix();
-	}
+	Eigen::Quaterniond q(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
+	q.normalize();
+	rotation.block<3,3>(0,0) = q.toRotationMatrix();
 
 	Eigen::Matrix4d scale = Eigen::Matrix4d::Identity();
-	if(node.scale.size() == 3){
-		scale(0,0) = node.scale[0];
-		scale(1,1) = node.scale[1];
-		scale(2,2) = node.scale[2];
-	}
+	scale(0,0) = node.scale[0];
+	scale(1,1) = node.scale[1];
+	scale(2,2) = node.scale[2];
 
 	return translation * rotation * scale;
 }
 
-void collect_primitives(const tinygltf::Model &model,
-                        int node_index,
-                        const Eigen::Matrix4d &parent,
-                        std::vector<PrimitiveInstance> &instances)
+bool collect_primitives(const tg3_model &model,
+                        const std::vector<int32_t> &roots,
+                        std::vector<PrimitiveInstance> &instances,
+                        std::string &error)
 {
-	const tinygltf::Node &node = model.nodes[node_index];
-	Eigen::Matrix4d world = parent * compose_transform(node);
-
-	if(node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size())){
-		const tinygltf::Mesh &mesh = model.meshes[node.mesh];
-		for(const tinygltf::Primitive &primitive : mesh.primitives){
-			if(primitive.mode == TINYGLTF_MODE_TRIANGLES){
-				instances.push_back({&primitive, world});
+	struct NodeVisit {
+		int32_t index;
+		Eigen::Matrix4d parent;
+	};
+	std::vector<NodeVisit> pending;
+	std::vector<bool> visited(model.nodes_count, false);
+	for(auto root = roots.rbegin(); root != roots.rend(); ++root){
+		pending.push_back({*root, Eigen::Matrix4d::Identity()});
+	}
+	while(!pending.empty()){
+		NodeVisit visit = pending.back();
+		pending.pop_back();
+		if(visit.index < 0 || static_cast<uint32_t>(visit.index) >= model.nodes_count){
+			error = "Invalid node index in glTF scene.";
+			return false;
+		}
+		if(visited[visit.index]){
+			error = "Cyclic or repeated node in glTF scene.";
+			return false;
+		}
+		visited[visit.index] = true;
+		const tg3_node &node = model.nodes[visit.index];
+		Eigen::Matrix4d world = visit.parent * compose_transform(node);
+		if(node.mesh >= 0 && static_cast<uint32_t>(node.mesh) < model.meshes_count){
+			const tg3_mesh &node_mesh = model.meshes[node.mesh];
+			for(uint32_t i = 0; i < node_mesh.primitives_count; ++i){
+				const tg3_primitive &primitive = node_mesh.primitives[i];
+				if(primitive.mode == TG3_MODE_TRIANGLES || primitive.mode == -1){
+					instances.push_back({&primitive, world});
+				}
 			}
 		}
-	}
-
-	for(int child : node.children){
-		if(child >= 0 && child < static_cast<int>(model.nodes.size())){
-			collect_primitives(model, child, world, instances);
+		for(uint32_t i = node.children_count; i > 0; --i){
+			pending.push_back({node.children[i - 1], world});
 		}
 	}
+	return true;
 }
 
-template<typename T>
-const unsigned char *accessor_element_ptr(const tinygltf::Model &model,
-                                          const tinygltf::Accessor &accessor,
-                                          size_t index,
-                                          size_t &stride_bytes)
+const uint8_t *accessor_element_ptr(const tg3_model &model,
+                                    const tg3_accessor &accessor,
+                                    uint64_t index)
 {
-	if(accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size())){
+	if(accessor.sparse.is_sparse || index >= accessor.count || accessor.buffer_view < 0 ||
+	   static_cast<uint32_t>(accessor.buffer_view) >= model.buffer_views_count){
 		return nullptr;
 	}
 
-	const tinygltf::BufferView &buffer_view = model.bufferViews[accessor.bufferView];
-	if(buffer_view.buffer < 0 || buffer_view.buffer >= static_cast<int>(model.buffers.size())){
+	const tg3_buffer_view &view = model.buffer_views[accessor.buffer_view];
+	if(view.buffer < 0 || static_cast<uint32_t>(view.buffer) >= model.buffers_count){
+		return nullptr;
+	}
+	const tg3_buffer &buffer = model.buffers[view.buffer];
+	int32_t component_size = tg3_component_size(accessor.component_type);
+	int32_t components = tg3_num_components(accessor.type);
+	int32_t stride = tg3_accessor_byte_stride(&accessor, &view);
+	if(component_size <= 0 || components <= 0 || stride < component_size * components ||
+	   !buffer.data.data || view.byte_offset > buffer.data.count ||
+	   view.byte_length > buffer.data.count - view.byte_offset ||
+	   accessor.byte_offset > view.byte_length){
 		return nullptr;
 	}
 
-	const tinygltf::Buffer &buffer = model.buffers[buffer_view.buffer];
-	size_t component_size = tinygltf::GetComponentSizeInBytes(accessor.componentType);
-	size_t num_components = tinygltf::GetNumComponentsInType(accessor.type);
-
-	size_t expected_stride = component_size * num_components;
-	stride_bytes = accessor.ByteStride(buffer_view);
-	if(stride_bytes == 0){
-		stride_bytes = expected_stride;
-	}
-
-	size_t offset = accessor.byteOffset + buffer_view.byteOffset + index * stride_bytes;
-	if(offset + expected_stride > buffer.data.size()){
+	uint64_t available = view.byte_length - accessor.byte_offset;
+	uint64_t element_size = static_cast<uint64_t>(component_size * components);
+	if(available < element_size || index > (available - element_size) / static_cast<uint64_t>(stride)){
 		return nullptr;
 	}
-
-	return buffer.data.data() + offset;
+	return buffer.data.data + view.byte_offset + accessor.byte_offset + index * static_cast<uint64_t>(stride);
 }
 
-bool read_position(const tinygltf::Model &model,
-                   const tinygltf::Accessor &accessor,
-                   size_t index,
+bool read_position(const tg3_model &model,
+                   const tg3_accessor &accessor,
+                   uint64_t index,
                    Eigen::Vector3d &out)
 {
-	size_t stride = 0;
-	const unsigned char *ptr = accessor_element_ptr<float>(model, accessor, index, stride);
+	const uint8_t *ptr = accessor_element_ptr(model, accessor, index);
 	if(!ptr){
 		return false;
 	}
 
-	const float *values = reinterpret_cast<const float *>(ptr);
+	float values[3];
+	std::memcpy(values, ptr, sizeof(values));
 	out = Eigen::Vector3d(static_cast<double>(values[0]),
 	                      static_cast<double>(values[1]),
 	                      static_cast<double>(values[2]));
@@ -340,71 +350,75 @@ bool read_position(const tinygltf::Model &model,
 uint32_t read_index_element(const unsigned char *ptr, int component_type)
 {
 	switch(component_type){
-		case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-			return static_cast<uint32_t>(*reinterpret_cast<const uint8_t*>(ptr));
-		case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-			return static_cast<uint32_t>(*reinterpret_cast<const uint16_t*>(ptr));
-		case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-			return *reinterpret_cast<const uint32_t*>(ptr);
+		case TG3_COMPONENT_TYPE_UNSIGNED_BYTE:
+			return ptr[0];
+		case TG3_COMPONENT_TYPE_UNSIGNED_SHORT:
+			return uint32_t(ptr[0]) | (uint32_t(ptr[1]) << 8);
+		case TG3_COMPONENT_TYPE_UNSIGNED_INT:
+			return uint32_t(ptr[0]) | (uint32_t(ptr[1]) << 8) | (uint32_t(ptr[2]) << 16) | (uint32_t(ptr[3]) << 24);
 		default:
 			return 0;
 	}
 }
 
-bool DummyLoadImage(tinygltf::Image*, const int, std::string*, std::string*, int, int, const unsigned char*, int, void*)
-{
-	return true;
-}
-
 bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &warning, std::string &error)
 {
-	tinygltf::TinyGLTF loader;
-	loader.SetImageLoader(DummyLoadImage, nullptr);
-	tinygltf::Model model;
-
-	bool is_binary = has_extension(filename, ".glb");
-	bool success = false;
-	std::string warn;
-	std::string err;
-	if(is_binary){
-		success = loader.LoadBinaryFromFile(&model, &err, &warn, filename);
+	tinygltf3::Model parsed;
+	tinygltf3::ErrorStack errors;
+	tg3_parse_options options;
+	tg3_parse_options_init(&options);
+	options.images_as_is = 1;
+	tg3_error_code result = tinygltf3::parse_file(parsed, errors, filename.c_str(), &options);
+	for(uint32_t i = 0; i < errors.count(); ++i){
+		const tg3_error_entry *entry = errors.entry(i);
+		if(entry->message){
+			std::string message = std::string(entry->message) + "\n";
+			if(entry->severity == TG3_SEVERITY_ERROR){
+				error += message;
+			}
+			else {
+				warning += message;
+			}
+		}
 	}
-	else{
-		success = loader.LoadASCIIFromFile(&model, &err, &warn, filename);
-	}
-
-	if(!warn.empty()){
-		warning += warn;
-	}
-	if(!err.empty()){
-		error += err;
-	}
-	if(!success){
+	if(result != TG3_OK){
 		if(error.empty()){
 			error = "Unable to parse glTF file.";
 		}
 		return false;
 	}
+	const tg3_model &model = *parsed.get();
 
 	std::vector<PrimitiveInstance> instances;
-	Eigen::Matrix4d identity = Eigen::Matrix4d::Identity();
-
-	if(model.scenes.empty()){
-		for(size_t i = 0; i < model.nodes.size(); ++i){
-			collect_primitives(model, static_cast<int>(i), identity, instances);
+	std::vector<int32_t> roots;
+	if(model.scenes_count == 0){
+		std::vector<bool> is_child(model.nodes_count, false);
+		for(uint32_t i = 0; i < model.nodes_count; ++i){
+			for(uint32_t j = 0; j < model.nodes[i].children_count; ++j){
+				int32_t child = model.nodes[i].children[j];
+				if(child >= 0 && static_cast<uint32_t>(child) < model.nodes_count){
+					is_child[child] = true;
+				}
+			}
+		}
+		for(uint32_t i = 0; i < model.nodes_count; ++i){
+			if(!is_child[i]){
+				roots.push_back(static_cast<int32_t>(i));
+			}
 		}
 	}
 	else{
-		int scene_index = model.defaultScene >= 0 ? model.defaultScene : 0;
-		if(scene_index < 0 || scene_index >= static_cast<int>(model.scenes.size())){
+		int32_t scene_index = model.default_scene >= 0 ? model.default_scene : 0;
+		if(static_cast<uint32_t>(scene_index) >= model.scenes_count){
 			scene_index = 0;
 		}
-		const tinygltf::Scene &scene = model.scenes[scene_index];
-		for(int node_index : scene.nodes){
-			if(node_index >= 0 && node_index < static_cast<int>(model.nodes.size())){
-				collect_primitives(model, node_index, identity, instances);
-			}
+		const tg3_scene &scene = model.scenes[scene_index];
+		for(uint32_t i = 0; i < scene.nodes_count; ++i){
+			roots.push_back(scene.nodes[i]);
 		}
+	}
+	if(!collect_primitives(model, roots, instances, error)){
+		return false;
 	}
 
 	if(instances.empty()){
@@ -429,65 +443,61 @@ bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &war
 
 	size_t instance_id = 0;
 	for(const PrimitiveInstance &instance : instances){
-		const tinygltf::Primitive &primitive = *instance.primitive;
-
-		auto pos_it = primitive.attributes.find("POSITION");
-		if(pos_it == primitive.attributes.end()){
+		const tg3_primitive &primitive = *instance.primitive;
+		int32_t position_accessor_index = -1;
+		for(uint32_t i = 0; i < primitive.attributes_count; ++i){
+			if(tg3_str_equals_cstr(primitive.attributes[i].key, "POSITION")){
+				position_accessor_index = primitive.attributes[i].value;
+				break;
+			}
+		}
+		if(position_accessor_index < 0 || static_cast<uint32_t>(position_accessor_index) >= model.accessors_count){
 			continue;
 		}
+		const tg3_accessor &position_accessor = model.accessors[position_accessor_index];
 
-		int position_accessor_index = pos_it->second;
-		if(position_accessor_index < 0 || position_accessor_index >= static_cast<int>(model.accessors.size())){
-			continue;
-		}
-		const tinygltf::Accessor &position_accessor = model.accessors[position_accessor_index];
-
-		if(position_accessor.type != TINYGLTF_TYPE_VEC3 ||
-		   position_accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT){
+		if(position_accessor.type != TG3_TYPE_VEC3 ||
+		   position_accessor.component_type != TG3_COMPONENT_TYPE_FLOAT || position_accessor.sparse.is_sparse){
 			error = "Unsupported POSITION accessor format in glTF.";
 			return false;
 		}
 
-		if(primitive.indices < 0 || primitive.indices >= static_cast<int>(model.accessors.size())){
+		if(primitive.indices < 0 || static_cast<uint32_t>(primitive.indices) >= model.accessors_count){
 			error = "Indexed primitives are required in glTF meshes.";
 			return false;
 		}
-		const tinygltf::Accessor &index_accessor = model.accessors[primitive.indices];
+		const tg3_accessor &index_accessor = model.accessors[primitive.indices];
 
-		if(index_accessor.componentType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE &&
-		   index_accessor.componentType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT &&
-		   index_accessor.componentType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT){
+		if(index_accessor.type != TG3_TYPE_SCALAR || index_accessor.sparse.is_sparse ||
+		   (index_accessor.component_type != TG3_COMPONENT_TYPE_UNSIGNED_BYTE &&
+		    index_accessor.component_type != TG3_COMPONENT_TYPE_UNSIGNED_SHORT &&
+		    index_accessor.component_type != TG3_COMPONENT_TYPE_UNSIGNED_INT)){
 			error = "Unsupported index component type in glTF primitive.";
 			return false;
 		}
 
-		size_t index_stride = 0;
-		const unsigned char *index_base = accessor_element_ptr<uint8_t>(model, index_accessor, 0, index_stride);
-		if(!index_base){
+		if(!accessor_element_ptr(model, index_accessor, 0)){
 			error = "Unable to read index data from glTF primitive.";
 			return false;
 		}
-		if(index_stride == 0){
-			index_stride = tinygltf::GetComponentSizeInBytes(index_accessor.componentType);
-		}
-
 		if(index_accessor.count % 3 != 0){
 			warning += "glTF primitive indices are not a multiple of three; trailing vertices will be ignored.\n";
 		}
 
 		for(size_t tri = 0; tri + 2 < index_accessor.count; tri += 3){
 			std::array<TriMesh::VertexHandle, 3> face_vertices;
-			bool valid_triangle = true;
 
 			for(int k = 0; k < 3; ++k){
-				size_t vertex_index_offset = (tri + k) * index_stride;
-				const unsigned char *index_ptr = index_base + vertex_index_offset;
-				uint32_t vertex_index = read_index_element(index_ptr, index_accessor.componentType);
+				const uint8_t *index_ptr = accessor_element_ptr(model, index_accessor, tri + k);
+				if(!index_ptr){
+					error = "Truncated index data in glTF primitive.";
+					return false;
+				}
+				uint32_t vertex_index = read_index_element(index_ptr, index_accessor.component_type);
 
 				if(vertex_index >= position_accessor.count){
-					warning += "glTF index points outside POSITION accessor range; triangle skipped.\n";
-					valid_triangle = false;
-					break;
+					error = "glTF index points outside POSITION accessor range.";
+					return false;
 				}
 
 				VertexKey key(instance_id, vertex_index);
@@ -495,9 +505,8 @@ bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &war
 				if(cache_it == vertex_cache.end()){
 					Eigen::Vector3d position;
 					if(!read_position(model, position_accessor, vertex_index, position)){
-						warning += "Failed reading POSITION data from glTF accessor; triangle skipped.\n";
-						valid_triangle = false;
-						break;
+						error = "Truncated POSITION data in glTF accessor.";
+						return false;
 					}
 
 					Eigen::Vector4d p(position.x(), position.y(), position.z(), 1.0);
@@ -509,10 +518,6 @@ bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &war
 				}
 
 				face_vertices[k] = cache_it->second;
-			}
-
-			if(!valid_triangle){
-				continue;
 			}
 
 			if(!mesh.add_face(face_vertices[0], face_vertices[1], face_vertices[2]).is_valid()){
