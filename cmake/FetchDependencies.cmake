@@ -28,13 +28,13 @@ set(OpenMesh_DIR "${openmesh_BINARY_DIR}/src/cmake" CACHE PATH "" FORCE)
 list(PREPEND CMAKE_PREFIX_PATH "${openmesh_BINARY_DIR}")
 list(PREPEND CMAKE_MODULE_PATH "${openmesh_SOURCE_DIR}/cmake")
 
-# ---------- tinygltf (header-only) ----------
-set(_TINYGLTF_URL "https://github.com/syoyo/tinygltf/archive/refs/tags/v2.9.7.zip")
+# ---------- tinygltf (C11 runtime) ----------
+set(_TINYGLTF_URL "https://github.com/syoyo/tinygltf/archive/refs/tags/v3.0.1.zip")
 FetchContent_Declare(
   tinygltf
   URL "${_TINYGLTF_URL}"
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-  URL_HASH SHA256=865ae4a220ff8bebc455f098e7c08bcb9e2701ef9eaef3519e9cc05ffd824dc9
+  URL_HASH SHA256=0814d73c8857b99af1597342752af6c47f70c7a686fe832b5465e27029ce8857
 )
 FetchContent_GetProperties(tinygltf)
 if(NOT tinygltf_POPULATED)

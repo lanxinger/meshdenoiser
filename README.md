@@ -268,16 +268,19 @@ The defaults are tuned for detail-preserving cleanup. Generate a commented templ
 | **Eigen** | 3.4.1 | Vendored, header-only | Shared by CMake and SwiftPM; override CLI headers with `-DEIGEN3_INCLUDE_DIR=...` |
 | **OpenMesh (CMake CLI)** | 11.0 | Fetched automatically | Stable release used for mesh data and traditional format I/O |
 | **OpenMesh Core (SwiftPM)** | `cb4e9528` | Vendored | Immutable upstream snapshot used by the reference backend |
-| **tinygltf** | 2.9.7 | Fetched automatically | Header-only glTF 2.0 parser |
+| **tinygltf** | 3.0.1 | Fetched automatically | C11 glTF 2.0 parser; indexed triangles with dense float32 positions |
 | **tinyusdz** | 0.9.1 | Fetched automatically | USD format support |
 | **OpenMP** | — | Optional | Multi-threaded performance (auto-detected) |
 | **SuiteSparse CHOLMOD** | — | Optional | Faster sparse solver (auto-detected, falls back to Eigen LDLT) |
 
 ## Build
 
+CMake tests require Python 3. The CTest suite checks the numerical golden
+fixture and generated GLB/glTF fixtures on macOS, Linux, and Windows.
+
 ### Linux (Ubuntu/Debian)
 ```bash
-sudo apt-get update && sudo apt-get install -y build-essential cmake
+sudo apt-get update && sudo apt-get install -y build-essential cmake python3
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
@@ -305,6 +308,7 @@ ctest --test-dir build -C Release --output-on-failure
 ## Input Format Notes
 
 - For **glTF** and **USD** files with multiple meshes or transforms, all geometry is combined and transforms are applied automatically before filtering.
+- glTF imports support indexed triangles with dense float32 positions and 8-, 16-, or 32-bit unsigned indices. Sparse accessors and nonindexed primitives are rejected explicitly.
 - Output format is determined by file extension (e.g., `.obj`, `.ply`, `.stl`).
 
 ## CI / Pre-built Binaries
