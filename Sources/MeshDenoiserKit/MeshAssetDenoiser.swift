@@ -94,7 +94,7 @@ public enum MeshAssetDenoiseError: LocalizedError, Sendable, Equatable {
 }
 
 public enum MeshAssetDenoiser {
-    private struct DenoisedMeshPatch {
+    struct DenoisedMeshPatch {
         var originalPositions: [SIMD3<Float>]
         var denoisedPositions: [SIMD3<Float>]
     }
@@ -446,7 +446,8 @@ public enum MeshAssetDenoiser {
             try exportUSDZByPatchingPoints(
                 inputURL: inputURL,
                 outputURL: temporaryURL,
-                denoisedMeshes: denoisedMeshes
+                denoisedMeshes: denoisedMeshes,
+                recomputesNormals: options.recomputesNormals
             )
         }
         progress?(1)
@@ -456,7 +457,8 @@ public enum MeshAssetDenoiser {
     private static func exportUSDZByPatchingPoints(
         inputURL: URL,
         outputURL: URL,
-        denoisedMeshes: [DenoisedMeshPatch]
+        denoisedMeshes: [DenoisedMeshPatch],
+        recomputesNormals: Bool
     ) throws {
         let fileManager = FileManager.default
         let workingDirectory = fileManager.temporaryDirectory
@@ -469,7 +471,7 @@ public enum MeshAssetDenoiser {
         let rootURL = try rootUSDFile(in: workingDirectory)
         let usdaURL = workingDirectory.appendingPathComponent("denoised.usda")
         try runTool("/usr/bin/usdcat", arguments: [rootURL.path, "-o", usdaURL.path])
-        try patchUSDAPoints(at: usdaURL, denoisedMeshes: denoisedMeshes)
+        try patchUSDAPoints(at: usdaURL, denoisedMeshes: denoisedMeshes, recomputesNormals: recomputesNormals)
         try runTool(
             "/usr/bin/usdzip",
             arguments: [outputURL.path, "--asset", usdaURL.lastPathComponent],
@@ -495,7 +497,7 @@ public enum MeshAssetDenoiser {
         return root
     }
 
-    private static func patchUSDAPoints(at url: URL, denoisedMeshes: [DenoisedMeshPatch]) throws {
+    static func patchUSDAPoints(at url: URL, denoisedMeshes: [DenoisedMeshPatch], recomputesNormals: Bool) throws {
         var text = try String(contentsOf: url, encoding: .utf8)
         var searchStart = text.startIndex
 
@@ -510,11 +512,11 @@ public enum MeshAssetDenoiser {
                 in: text,
                 from: searchStart
             )
-            let normalsStatement = nextUSDAArrayStatementIfPresent(
+            let normalsStatement = recomputesNormals ? nextUSDAArrayStatementIfPresent(
                 named: "normal3f[] normals =",
                 in: text,
                 from: searchStart
-            )
+            ) : nil
             let pointsStatement = try nextUSDAArrayStatement(
                 named: "point3f[] points =",
                 in: text,
@@ -724,7 +726,7 @@ public enum MeshAssetDenoiser {
         String(format: "%.9g", locale: Locale(identifier: "en_US_POSIX"), Double(value))
     }
 
-    private static func runTool(
+    static func runTool(
         _ executablePath: String,
         arguments: [String],
         currentDirectoryURL: URL? = nil
@@ -735,21 +737,27 @@ public enum MeshAssetDenoiser {
         process.currentDirectoryURL = currentDirectoryURL
 
         let outputPipe = Pipe()
-        let errorPipe = Pipe()
         process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        process.standardError = outputPipe
 
         do {
             try process.run()
         } catch {
             throw MeshAssetDenoiseError.exportFailed(executablePath)
         }
+        // Drain while the child runs so either output stream can exceed pipe capacity.
+        // Retain only bounded diagnostics; discard the rest after reading it.
+        var diagnostics = Data()
+        let diagnosticLimit = 64 * 1024
+        while true {
+            let chunk = outputPipe.fileHandleForReading.readData(ofLength: diagnosticLimit)
+            if chunk.isEmpty { break }
+            diagnostics.append(chunk.prefix(max(0, diagnosticLimit - diagnostics.count)))
+        }
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let message = String(data: errorData + outputData, encoding: .utf8) ?? executablePath
+            let message = String(data: diagnostics, encoding: .utf8) ?? executablePath
             throw MeshAssetDenoiseError.exportFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }

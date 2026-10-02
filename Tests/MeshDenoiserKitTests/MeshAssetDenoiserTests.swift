@@ -8,6 +8,37 @@ import XCTest
 @testable import MeshDenoiserKit
 
 final class MeshAssetDenoiserTests: XCTestCase {
+    func testToolDrainsLargeOutputOnBothStreams() throws {
+        // Alternating writes would fill either undrained pipe before child exit.
+        try MeshAssetDenoiser.runTool("/bin/sh", arguments: ["-c",
+            "i=0; while [ $i -lt 5000 ]; do printf '%04096d' 0; printf '%04096d' 0 >&2; i=$((i+1)); done"])
+    }
+
+    func testUSDAPatchHonorsNormalRecomputationOption() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".usda")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let normals = "normal3f[] normals = [(1, 0, 0), (1, 0, 0), (1, 0, 0)]"
+        let text = """
+        #usda 1.0
+        def Mesh "Triangle" {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            \(normals)
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        }
+        """
+        let patch = MeshAssetDenoiser.DenoisedMeshPatch(
+            originalPositions: [.init(0, 0, 0), .init(1, 0, 0), .init(0, 1, 0)],
+            denoisedPositions: [.init(0, 0, 0), .init(2, 0, 0), .init(0, 2, 0)])
+        for recompute in [false, true] {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            try MeshAssetDenoiser.patchUSDAPoints(at: url, denoisedMeshes: [patch], recomputesNormals: recompute)
+            let result = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertTrue(result.contains("(2, 0, 0)"))
+            XCTAssertEqual(result.contains(normals), !recompute)
+            if recompute { XCTAssertTrue(result.contains("normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1)]")) }
+        }
+    }
 
     func testPreviewReturnsDenoisedGeometryWithoutWritingAsset() async throws {
         let directory = FileManager.default.temporaryDirectory
