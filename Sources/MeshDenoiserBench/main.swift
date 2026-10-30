@@ -757,15 +757,21 @@ enum MeshDenoiserBench {
 
         let stride = attributeData.stride
         let vertexCount = mesh.vertexCount
-        let dataStart = attributeData.dataStart
         var positions = [SIMD3<Float>]()
         positions.reserveCapacity(vertexCount)
 
-        for vertexIndex in 0..<vertexCount {
-            let pointer = dataStart
-                .advanced(by: vertexIndex * stride)
-                .assumingMemoryBound(to: SIMD3<Float>.self)
-            positions.append(pointer.pointee)
+        // `.float3` is 12 bytes but SIMD3<Float> is 16: read the components
+        // individually so the last vertex never reads past the buffer.
+        withExtendedLifetime(attributeData) {
+            let dataStart = UnsafeRawPointer(attributeData.dataStart)
+            for vertexIndex in 0..<vertexCount {
+                let offset = vertexIndex * stride
+                positions.append(SIMD3<Float>(
+                    dataStart.loadUnaligned(fromByteOffset: offset, as: Float.self),
+                    dataStart.loadUnaligned(fromByteOffset: offset + 4, as: Float.self),
+                    dataStart.loadUnaligned(fromByteOffset: offset + 8, as: Float.self)
+                ))
+            }
         }
         return positions
     }
@@ -785,19 +791,15 @@ enum MeshDenoiserBench {
         }
 
         let indexBuffer = triangleSubmesh.indexBuffer(asIndexType: .uInt32)
-        let map = indexBuffer.map()
-        let pointer = map.bytes.assumingMemoryBound(to: UInt32.self)
         let count = triangleSubmesh.indexCount
         guard count.isMultiple(of: 3) else {
             throw BenchError.unsupportedInput("USD triangle index count is not divisible by 3")
         }
 
-        var indices = [UInt32]()
-        indices.reserveCapacity(count)
-        for index in 0..<count {
-            indices.append(pointer[index])
+        let map = indexBuffer.map()
+        return withExtendedLifetime(map) {
+            Array(UnsafeBufferPointer(start: map.bytes.assumingMemoryBound(to: UInt32.self), count: count))
         }
-        return indices
     }
 
     private static func globalTransform(for object: MDLObject) -> simd_float4x4 {

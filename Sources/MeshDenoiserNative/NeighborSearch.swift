@@ -114,6 +114,67 @@ enum NeighborSearch {
             return pairCount
         }
 
+        /// Number of neighbors within `radius` of every face, i.e. how many pairs
+        /// `forEachPair` reports for that face on either side. Each face counts its own
+        /// neighborhood (distance and cell tests are symmetric), so the pass runs in
+        /// parallel without shared writes and matches `forEachPair` exactly.
+        func neighborCounts(shouldCancel: (@Sendable () -> Bool)? = nil) throws -> [UInt32] {
+            let faceCount = centroids.count
+            var counts = [UInt32](repeating: 0, count: faceCount)
+            let chunkSize = 256
+            var failedFlags = [Bool](
+                repeating: false,
+                count: ParallelChunks.chunkCount(for: faceCount, chunkSize: chunkSize)
+            )
+
+            try centroids.withUnsafeBufferPointer { centroidBuffer in
+                try counts.withUnsafeMutableBufferPointer { countBuffer in
+                    try failedFlags.withUnsafeMutableBufferPointer { failed in
+                        try ParallelChunks.forEachCancellable(
+                            count: faceCount,
+                            chunkSize: chunkSize,
+                            shouldCancel: shouldCancel
+                        ) { chunk, range in
+                            for face in range {
+                                let centroid = centroidBuffer[face]
+                                guard let baseCell = try? Self.cell(
+                                    for: centroid,
+                                    minimum: minCentroid,
+                                    radius: radius
+                                ) else {
+                                    failed[chunk] = true
+                                    return
+                                }
+                                var count: UInt32 = 0
+                                for dx in -1...1 {
+                                    for dy in -1...1 {
+                                        for dz in -1...1 {
+                                            let neighborCell = CellKey(
+                                                x: baseCell.x + dx,
+                                                y: baseCell.y + dy,
+                                                z: baseCell.z + dz
+                                            )
+                                            guard let bucket = cells[neighborCell] else { continue }
+                                            for other in bucket where other != face {
+                                                let diff = centroid - centroidBuffer[other]
+                                                if lengthSquared(diff) < radiusSquared {
+                                                    count += 1
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                countBuffer[face] = count
+                            }
+                        }
+                    }
+                }
+            }
+
+            guard !failedFlags.contains(true) else { throw NativeDenoiseError.invalidInput }
+            return counts
+        }
+
         private static func cell(
             for point: SIMD3<Float>,
             minimum: SIMD3<Float>,

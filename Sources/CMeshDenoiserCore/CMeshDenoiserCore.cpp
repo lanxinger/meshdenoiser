@@ -21,11 +21,13 @@ void md_params_init_defaults(md_params *params)
     params->deterministic = 0;
 }
 
-md_status md_denoise(const float *vertices, size_t vertex_count,
-                     const uint32_t *indices, size_t triangle_count,
-                     const md_params *params,
-                     float *out_vertices,
-                     md_progress_fn progress, void *ctx)
+namespace {
+
+md_status denoise_impl(const float *vertices, size_t vertex_count,
+                       const uint32_t *indices, size_t triangle_count,
+                       const md_params *params,
+                       float *out_vertices,
+                       md_progress_fn progress, md_cancel_fn cancel, void *ctx)
 {
     if(vertices == nullptr || indices == nullptr || params == nullptr || out_vertices == nullptr ||
        vertex_count == 0 || triangle_count == 0){
@@ -88,9 +90,16 @@ md_status md_denoise(const float *vertices, size_t vertex_count,
     // Same pipeline as the CLI: normalize -> denoise -> restore.
     Eigen::Vector3d original_center;
     double original_scale = 0.0;
-    SDFilter::normalize_mesh(mesh, original_center, original_scale);
+    if(!SDFilter::normalize_mesh(mesh, original_center, original_scale)){
+        return MD_ERR_INVALID_INPUT; // zero extent
+    }
 
     SDFilter::MeshNormalDenoising denoiser(mesh);
+    if(cancel != nullptr){
+        denoiser.set_cancel_check([cancel, ctx]() -> bool {
+            return cancel(ctx);
+        });
+    }
     if(progress != nullptr){
         denoiser.set_progress_callback([progress, ctx](int completed, int total) -> bool {
             return progress(completed, total, ctx);
@@ -114,4 +123,22 @@ md_status md_denoise(const float *vertices, size_t vertex_count,
     }
 
     return MD_OK;
+}
+
+} // namespace
+
+md_status md_denoise(const float *vertices, size_t vertex_count,
+                     const uint32_t *indices, size_t triangle_count,
+                     const md_params *params,
+                     float *out_vertices,
+                     md_progress_fn progress, md_cancel_fn cancel, void *ctx)
+{
+    // Exceptions (std::bad_alloc on huge meshes, overflow checks) must not cross the C boundary.
+    try{
+        return denoise_impl(vertices, vertex_count, indices, triangle_count, params,
+                            out_vertices, progress, cancel, ctx);
+    }
+    catch(...){
+        return MD_ERR_SOLVER_FAILED;
+    }
 }

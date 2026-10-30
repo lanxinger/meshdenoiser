@@ -102,7 +102,7 @@ final class DenoiseContractTests: XCTestCase {
     func testCancellationThrowsCancellationError() async {
         let (positions, indices) = Self.noisyOctahedron()
         var params = MeshDenoiseParameters()
-        params.outerIterations = 50 // cancellation is checked after each outer iteration
+        params.outerIterations = 50 // keep the run long enough that cancel() lands mid-run
 
         let task = Task {
             try await MeshDenoiser.denoise(positions: positions, indices: indices, parameters: params)

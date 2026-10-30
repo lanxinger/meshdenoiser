@@ -75,7 +75,7 @@ enum MeshConnectivity {
             rawAreas.append(doubleArea * 0.5)
         }
 
-        let meanArea = rawAreas.reduce(0, +) / Float(rawAreas.count)
+        let meanArea = Float(rawAreas.reduce(0.0) { $0 + Double($1) } / Double(rawAreas.count))
         guard meanArea.isFinite, meanArea > 0 else {
             throw NativeDenoiseError.invalidInput
         }
@@ -153,17 +153,18 @@ enum MeshConnectivity {
         centroids: [SIMD3<Float>],
         edges: [EdgeRecord]
     ) throws -> Float {
-        var sum: Float = 0
-        var count: Float = 0
+        // Double sum and Int count: a Float count stops increasing at 2^24 edges.
+        var sum = 0.0
+        var count = 0
 
         for edge in edges {
             guard let face1 = edge.face1 else { continue }
-            sum += length(centroids[Int(edge.face0)] - centroids[Int(face1)])
+            sum += Double(length(centroids[Int(edge.face0)] - centroids[Int(face1)]))
             count += 1
         }
 
         guard count > 0 else { throw NativeDenoiseError.invalidInput }
-        return sum / count
+        return Float(sum / Double(count))
     }
 }
 

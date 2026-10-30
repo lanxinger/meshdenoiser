@@ -74,7 +74,7 @@ protected:
 
 	virtual void output_options()
 	{
-		Parameters::output_options();
+		MeshFilterParameters::output_options();
 		std::cout << "Mesh denoising outer iterations: " << outer_iterations << std::endl;
 	}
 };
@@ -94,16 +94,12 @@ public:
 
 	// Called after each completed outer iteration with (completed, total).
 	// Return false to cancel; denoise() then returns false and cancelled() reports true.
+	// For cancellation within an outer iteration, see set_cancel_check().
 	typedef std::function<bool(int, int)> ProgressCallback;
 
 	void set_progress_callback(ProgressCallback callback)
 	{
 		progress_callback_ = std::move(callback);
-	}
-
-	bool cancelled() const
-	{
-		return cancelled_;
 	}
 
 
@@ -130,8 +126,14 @@ public:
 				std::cout << "Outer iteration " << (i+1) << "..." << std::endl;
 			}
 
+			if(cancel_requested()){
+				return false;
+			}
+
 			if(!filter(param, output_mesh)){
-				std::cerr << "Unable to perform normal filter. Denoising aborted." << std::endl;
+				if(!cancelled_){
+					std::cerr << "Unable to perform normal filter. Denoising aborted." << std::endl;
+				}
 				return false;
 			}
 			const RunStatistics &iter_stats = run_stats();
@@ -168,7 +170,6 @@ public:
 private:
 
 	ProgressCallback progress_callback_;
-	bool cancelled_ = false;
 
 protected:
 
@@ -191,7 +192,6 @@ protected:
 
 		std::vector<double> patch_normal_consistency(face_count, 0);
 		Eigen::Matrix3Xd patch_avg_normal(3, face_count);
-		std::vector<int> face_stamp(face_count, -1), edge_stamp(edge_count, -1);
 
 		double epsilon = 1e-9;
 
@@ -229,6 +229,12 @@ protected:
 			}
 		}
 
+		OMP_PARALLEL
+		{
+		// Per-thread visit stamps; every other write below is to slot i only.
+		std::vector<int> face_stamp(face_count, -1), edge_stamp(edge_count, -1);
+
+		OMP_FOR
 		for(int i = 0; i < face_count; ++ i)
 		{
 			// Each candidate patch is associated with a face at its center.
@@ -261,9 +267,10 @@ protected:
 
 			neighborhood_faces_per_face[i] = faces_in_patch;
 
-			// Collect face normals and edge saliency values from the patch, and compute patch normal consistency value and average normal
-			int n_faces_in_patch = checked_int_count(faces_in_patch.size(), "patch face count");
-			int n_edges_in_patch = checked_int_count(edges_in_patch.size(), "patch edge count");
+			// Collect face normals and edge saliency values from the patch, and compute patch normal consistency value and average normal.
+			// (Patch sizes are bounded by vertex valence; no overflow check, which could not throw out of the parallel region anyway.)
+			int n_faces_in_patch = static_cast<int>(faces_in_patch.size());
+			int n_edges_in_patch = static_cast<int>(edges_in_patch.size());
 
 			Eigen::Matrix3Xd face_normals(3, n_faces_in_patch);
 			Eigen::VectorXd face_area(n_faces_in_patch);
@@ -296,6 +303,7 @@ protected:
 
 			patch_normal_consistency[i] *= max_normal_diff;
 			patch_avg_normal.col(i) = (face_normals * face_area).normalized();
+		}
 		}
 
 		OMP_PARALLEL

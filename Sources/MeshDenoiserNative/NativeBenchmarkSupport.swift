@@ -37,7 +37,7 @@ public enum NativeBenchmarkSupport {
         let etaPrime = Float(parameters.eta) * connectivity.averageNeighborFaceCentroidDistance
 
         if useGPU {
-            var precompute = try FilterPrecompute.buildForGPU(
+            let prepared = try FilterGPU.prepare(
                 centroids: connectivity.faceGeometry.centroids,
                 guidanceNormals: guidanceNormals,
                 initialNormals: connectivity.faceGeometry.normals,
@@ -46,9 +46,9 @@ public enum NativeBenchmarkSupport {
                 parameters: parameters
             )
             return try FilterGPU.run(
+                prepared: prepared,
                 initialSignals: connectivity.faceGeometry.normals,
                 areaWeights: connectivity.faceGeometry.areaWeights,
-                precompute: &precompute,
                 nu: Float(parameters.nu)
             ).signals
         }

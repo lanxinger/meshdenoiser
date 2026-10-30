@@ -36,6 +36,7 @@
 #include <OpenMesh/Core/IO/MeshIO.hh>
 #include <OpenMesh/Core/Geometry/VectorT.hh>
 #include "EigenTypes.h"
+#include <cmath>
 
 
 /// Default traits for triangle mesh
@@ -180,6 +181,11 @@ inline double average_neighbor_face_centroid_dist(const MeshT &mesh)
 		}
 	}
 
+	// No interior edges (e.g. an unconnected triangle soup): there is no spacing to measure
+	if(n == 0){
+		return 0.0;
+	}
+
 	return centroid_dist / n;
 
 }
@@ -203,12 +209,20 @@ inline double average_edge_length(const MeshT &mesh)
 
 
 // Center the mesh at the origin, and normalize its scale
-// Return the orginal mesh center, and the orginal scale
+// Return the orginal mesh center, and the orginal scale.
+// Returns false, leaving the mesh untouched, if the mesh is empty or has zero extent.
 template<typename MeshT>
-inline void normalize_mesh(MeshT &mesh, Eigen::Vector3d &original_center, double &original_scale)
+inline bool normalize_mesh(MeshT &mesh, Eigen::Vector3d &original_center, double &original_scale)
 {
+	if(mesh.n_vertices() == 0){
+		return false;
+	}
+
 	original_center = mesh_center(mesh);
 	original_scale = bbox_diag_length(mesh);
+	if(!(original_scale > 0.0) || !std::isfinite(original_scale)){
+		return false;
+	}
 
 	Matrix3X vtx_pos;
 	get_vertex_points(mesh, vtx_pos);
@@ -217,6 +231,7 @@ inline void normalize_mesh(MeshT &mesh, Eigen::Vector3d &original_center, double
 	vtx_pos *= (1.0 / original_scale);
 
 	set_vertex_points(mesh, vtx_pos);
+	return true;
 }
 
 // Scale and move a normalized mesh to according to its original scale and center

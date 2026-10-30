@@ -110,6 +110,93 @@ enum FilterGPU {
         return readPartialDisplacement(from: partialBuffer, count: partialCount)
     }
 
+    /// Static filter inputs resident in Metal buffers.
+    struct PreparedFilter {
+        let faceCount: Int
+        let rowOffsetBuffer: MTLBuffer
+        let rowValueBuffer: MTLBuffer
+        let staticWeightBuffer: MTLBuffer
+        let weightedInitialBuffer: MTLBuffer
+        let convergenceThreshold: Float
+    }
+
+    /// Builds the filter precompute straight into shared Metal buffers: a counting
+    /// pass sizes the neighbor rows exactly, and the fill pass writes rows and
+    /// weights into buffer memory, so no Swift-array copy coexists with the buffers.
+    static func prepare(
+        centroids: [SIMD3<Float>],
+        guidanceNormals: [SIMD3<Float>],
+        initialNormals: [SIMD3<Float>],
+        areaWeights: [Float],
+        etaPrime: Float,
+        parameters: NativeDenoiseParameters,
+        shouldCancel: (@Sendable () -> Bool)? = nil
+    ) throws -> PreparedFilter {
+        guard let context = sharedContext else { throw NativeDenoiseError.solverFailed }
+        guard shouldCancel?() != true else { throw NativeDenoiseError.cancelled }
+
+        let layout = try FilterPrecompute.makeNeighborLayout(
+            centroids: centroids,
+            guidanceNormals: guidanceNormals,
+            initialNormals: initialNormals,
+            areaWeights: areaWeights,
+            etaPrime: etaPrime,
+            parameters: parameters,
+            shouldCancel: shouldCancel
+        )
+        let faceCount = layout.faceCount
+        guard faceCount <= UInt32.max,
+              let rowOffsetBuffer = makeBuffer(device: context.device, values: layout.rowOffsets),
+              let rowValueBuffer = context.device.makeBuffer(
+                length: layout.rowEntryCount * MemoryLayout<FaceNeighbor>.stride,
+                options: [.storageModeShared]
+              ),
+              let staticWeightBuffer = context.device.makeBuffer(
+                length: layout.pairCount * MemoryLayout<Float>.stride,
+                options: [.storageModeShared]
+              ),
+              let weightedInitialBuffer = context.device.makeBuffer(
+                length: faceCount * MemoryLayout<SIMD4<Float>>.stride,
+                options: [.storageModeShared]
+              )
+        else {
+            throw NativeDenoiseError.solverFailed
+        }
+
+        let areaSpatialSum = try FilterPrecompute.fillNeighborRows(
+            layout: layout,
+            rowValues: boundBuffer(rowValueBuffer, as: FaceNeighbor.self, count: layout.rowEntryCount),
+            staticWeights: boundBuffer(staticWeightBuffer, as: Float.self, count: layout.pairCount),
+            guidanceNormals: guidanceNormals,
+            areaWeights: areaWeights,
+            etaPrime: etaPrime,
+            mu: Float(parameters.mu),
+            shouldCancel: shouldCancel
+        )
+        let scalars = try FilterPrecompute.finishScalars(
+            areaSpatialSum: areaSpatialSum,
+            areaWeights: areaWeights,
+            parameters: parameters
+        )
+
+        let weightedInitial = boundBuffer(weightedInitialBuffer, as: SIMD4<Float>.self, count: faceCount)
+        for face in 0..<faceCount {
+            let value = initialNormals[face] * areaWeights[face] * scalars.initialScale
+            weightedInitial[face] = SIMD4<Float>(value.x, value.y, value.z, 0)
+        }
+
+        return PreparedFilter(
+            faceCount: faceCount,
+            rowOffsetBuffer: rowOffsetBuffer,
+            rowValueBuffer: rowValueBuffer,
+            staticWeightBuffer: staticWeightBuffer,
+            weightedInitialBuffer: weightedInitialBuffer,
+            convergenceThreshold: scalars.convergenceThreshold
+        )
+    }
+
+    /// Array-precompute entry point (tests, benchmarks). Moves the arrays into
+    /// Metal buffers one at a time, releasing each array after its copy.
     static func run(
         initialSignals: [SIMD3<Float>],
         areaWeights: [Float],
@@ -122,6 +209,7 @@ enum FilterGPU {
         guard let context = sharedContext,
               !initialSignals.isEmpty,
               initialSignals.count == areaWeights.count,
+              initialSignals.count == precompute.weightedInitialSignals.count,
               initialSignals.count <= UInt32.max,
               nu.isFinite,
               nu > 0,
@@ -130,11 +218,6 @@ enum FilterGPU {
             throw NativeDenoiseError.solverFailed
         }
 
-        let reductionWidth = reductionThreadgroupWidth(for: context.gatherReductionPipeline)
-        let partialCount = partialDisplacementCount(
-            faceCount: initialSignals.count,
-            threadgroupWidth: reductionWidth
-        )
         let faceCount = initialSignals.count
         let convergenceThreshold = precompute.convergenceThreshold
         precompute.pairs.removeAll(keepingCapacity: false)
@@ -167,6 +250,51 @@ enum FilterGPU {
         ) else {
             throw NativeDenoiseError.solverFailed
         }
+
+        return try run(
+            prepared: PreparedFilter(
+                faceCount: faceCount,
+                rowOffsetBuffer: rowOffsetBuffer,
+                rowValueBuffer: rowValueBuffer,
+                staticWeightBuffer: staticWeightBuffer,
+                weightedInitialBuffer: weightedInitialBuffer,
+                convergenceThreshold: convergenceThreshold
+            ),
+            initialSignals: initialSignals,
+            areaWeights: areaWeights,
+            nu: nu,
+            maxIterations: maxIterations,
+            shouldCancel: shouldCancel
+        )
+    }
+
+    static func run(
+        prepared: PreparedFilter,
+        initialSignals: [SIMD3<Float>],
+        areaWeights: [Float],
+        nu: Float,
+        maxIterations: Int = 100,
+        shouldCancel: (@Sendable () -> Bool)? = nil
+    ) throws -> (signals: [SIMD3<Float>], iterations: Int, converged: Bool) {
+        guard shouldCancel?() != true else { throw NativeDenoiseError.cancelled }
+        guard let context = sharedContext,
+              !initialSignals.isEmpty,
+              initialSignals.count == prepared.faceCount,
+              initialSignals.count == areaWeights.count,
+              initialSignals.count <= UInt32.max,
+              nu.isFinite,
+              nu > 0,
+              maxIterations > 0
+        else {
+            throw NativeDenoiseError.solverFailed
+        }
+
+        let faceCount = prepared.faceCount
+        let reductionWidth = reductionThreadgroupWidth(for: context.gatherReductionPipeline)
+        let partialCount = partialDisplacementCount(
+            faceCount: faceCount,
+            threadgroupWidth: reductionWidth
+        )
 
         var signals = initialSignals.map { SIMD4<Float>($0.x, $0.y, $0.z, 0) }
         guard let signalsBuffer = makeBufferAndRelease(device: context.device, values: &signals) else {
@@ -207,10 +335,10 @@ enum FilterGPU {
                 encoder,
                 pipeline: context.gatherReductionPipeline,
                 inputBuffer: inputBuffer,
-                weightedInitialBuffer: weightedInitialBuffer,
-                rowOffsetBuffer: rowOffsetBuffer,
-                rowValueBuffer: rowValueBuffer,
-                staticWeightBuffer: staticWeightBuffer,
+                weightedInitialBuffer: prepared.weightedInitialBuffer,
+                rowOffsetBuffer: prepared.rowOffsetBuffer,
+                rowValueBuffer: prepared.rowValueBuffer,
+                staticWeightBuffer: prepared.staticWeightBuffer,
                 areaWeightBuffer: areaWeightBuffer,
                 outputBuffer: outputBuffer,
                 partialBuffer: partialDisplacementBuffer,
@@ -228,7 +356,7 @@ enum FilterGPU {
             latestBuffer = outputBuffer
             let displacement = readPartialDisplacement(from: partialDisplacementBuffer, count: partialCount)
 
-            if displacement <= convergenceThreshold {
+            if displacement <= prepared.convergenceThreshold {
                 return (readFloat3Signals(from: outputBuffer, count: faceCount), iteration, true)
             }
 
@@ -236,6 +364,17 @@ enum FilterGPU {
         }
 
         return (readFloat3Signals(from: latestBuffer, count: faceCount), maxIterations, false)
+    }
+
+    private static func boundBuffer<T>(
+        _ buffer: MTLBuffer,
+        as type: T.Type,
+        count: Int
+    ) -> UnsafeMutableBufferPointer<T> {
+        UnsafeMutableBufferPointer(
+            start: buffer.contents().bindMemory(to: type, capacity: count),
+            count: count
+        )
     }
 
     private static func makeBuffer<T>(
@@ -294,7 +433,7 @@ enum FilterGPU {
         encoder.setBytes(&hDynamic, length: MemoryLayout<Float>.stride, index: 8)
         encoder.setBytes(&count, length: MemoryLayout<UInt32>.stride, index: 9)
         encoder.setThreadgroupMemoryLength(
-            threadgroupWidth * MemoryLayout<Float>.stride,
+            threadgroupMemoryLength(threadgroupWidth: threadgroupWidth),
             index: 0
         )
         encoder.dispatchThreads(
@@ -326,7 +465,7 @@ enum FilterGPU {
         encoder.setBuffer(partialBuffer, offset: 0, index: 3)
         encoder.setBytes(&count, length: MemoryLayout<UInt32>.stride, index: 4)
         encoder.setThreadgroupMemoryLength(
-            threadgroupWidth * MemoryLayout<Float>.stride,
+            threadgroupMemoryLength(threadgroupWidth: threadgroupWidth),
             index: 0
         )
         encoder.dispatchThreads(
@@ -336,7 +475,20 @@ enum FilterGPU {
     }
 
     private static func reductionThreadgroupWidth(for pipeline: MTLComputePipelineState) -> Int {
-        max(1, min(pipeline.maxTotalThreadsPerThreadgroup, 256))
+        reductionThreadgroupWidth(maxTotalThreadsPerThreadgroup: pipeline.maxTotalThreadsPerThreadgroup)
+    }
+
+    /// The kernels' tree reduction halves the stride each step, so the width must be
+    /// a power of two: largest power of two <= min(limit, 256).
+    static func reductionThreadgroupWidth(maxTotalThreadsPerThreadgroup: Int) -> Int {
+        let limit = max(1, min(maxTotalThreadsPerThreadgroup, 256))
+        return 1 << (Int.bitWidth - 1 - limit.leadingZeroBitCount)
+    }
+
+    /// Threadgroup memory lengths must be multiples of 16 bytes.
+    private static func threadgroupMemoryLength(threadgroupWidth: Int) -> Int {
+        let bytes = threadgroupWidth * MemoryLayout<Float>.stride
+        return (bytes + 15) / 16 * 16
     }
 
     private static func partialDisplacementCount(
@@ -348,7 +500,7 @@ enum FilterGPU {
 
     private static func readPartialDisplacement(from buffer: MTLBuffer, count: Int) -> Float {
         let pointer = buffer.contents().bindMemory(to: Float.self, capacity: count)
-        return UnsafeBufferPointer(start: pointer, count: count).reduce(0, +)
+        return Float(UnsafeBufferPointer(start: pointer, count: count).reduce(0.0) { $0 + Double($1) })
     }
 
     private static func readFloat3Signals(from buffer: MTLBuffer, count: Int) -> [SIMD3<Float>] {
