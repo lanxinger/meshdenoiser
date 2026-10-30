@@ -101,13 +101,14 @@ public:
 			return false;
 		}
 
-		if(mesh_update_closeness_weight < 0){
-			std::cerr << "Error: MeshUpdateClosenessWeight must be positive" << std::endl;
+		if(!(mesh_update_closeness_weight >= 0.0) || !std::isfinite(mesh_update_closeness_weight)){
+			std::cerr << "Error: MeshUpdateClosenessWeight must be finite and non-negative" << std::endl;
 			return false;
 		}
 
-		if(mesh_update_disp_eps < 0.0){
-			std::cerr << "Error: MeshUpdateDisplacementEps must be non-negative" << std::endl;
+		// Any value <= 0 disables the early stop, matching the documented option semantics.
+		if(!std::isfinite(mesh_update_disp_eps)){
+			std::cerr << "Error: MeshUpdateDisplacementEps must be finite" << std::endl;
 			return false;
 		}
 
@@ -162,10 +163,17 @@ public:
 		Timer::EventID mesh_flter_begin_time = timer.get_time();
 
 		// Rescale the eta parameter, according to average distance between neighboring face centroids
-		param.eta *= average_neighbor_face_centroid_dist(mesh_);
+		const double centroid_dist = average_neighbor_face_centroid_dist(mesh_);
+		if(!(centroid_dist > 0.0) || !std::isfinite(centroid_dist)){
+			std::cerr << "Error: mesh has no faces sharing an edge; weld coincident vertices before denoising" << std::endl;
+			return false;
+		}
+		param.eta *= centroid_dist;
 
 		if(!SDFilter::filter(param)){
-			std::cerr << "Error in performing SD filter" << std::endl;
+			if(!cancelled_){
+				std::cerr << "Error in performing SD filter" << std::endl;
+			}
 			return false;
 		}
 
@@ -178,7 +186,9 @@ public:
 
 		if(param.mesh_update_method == MeshFilterParameters::ITERATIVE_UPDATE){
 			if(!iterative_mesh_update(param, target_normals, output_mesh)){
-				std::cerr << "Error in iteative mesh update" << std::endl;
+				if(!cancelled_){
+					std::cerr << "Error in iteative mesh update" << std::endl;
+				}
 				return false;
 			}
 		}
@@ -262,36 +272,52 @@ protected:
 			cells[centroid_cell(face_centroids.col(i))].push_back(i);
 		}
 
-		std::vector<std::pair<int, int>> pairs;
-		pairs.reserve(static_cast<std::size_t>(n_faces) * 12u);
+		// Each thread collects the pairs of one contiguous block of faces (static schedule), so
+		// concatenating the blocks in thread order reproduces the serial pair order exactly.
+#ifdef USE_OPENMP
+		const int max_threads = omp_get_max_threads();
+#else
+		const int max_threads = 1;
+#endif
+		std::vector<std::vector<std::pair<int, int>>> thread_pairs(static_cast<std::size_t>(max_threads));
 
-		for(int i = 0; i < n_faces; ++i)
+		OMP_PARALLEL
 		{
-			const Eigen::Vector3d ci = face_centroids.col(i);
-			const CellKey c = centroid_cell(ci);
+#ifdef USE_OPENMP
+			std::vector<std::pair<int, int>> &pairs = thread_pairs[static_cast<std::size_t>(omp_get_thread_num())];
+#else
+			std::vector<std::pair<int, int>> &pairs = thread_pairs[0];
+#endif
 
-			for(int dx = -1; dx <= 1; ++dx)
+			OMP_FOR_STATIC
+			for(int i = 0; i < n_faces; ++i)
 			{
-				for(int dy = -1; dy <= 1; ++dy)
-				{
-					for(int dz = -1; dz <= 1; ++dz)
-					{
-						CellKey nkey{c[0] + dx, c[1] + dy, c[2] + dz};
-						auto it = cells.find(nkey);
-						if(it == cells.end()){
-							continue;
-						}
+				const Eigen::Vector3d ci = face_centroids.col(i);
+				const CellKey c = centroid_cell(ci);
 
-						const std::vector<int> &bucket = it->second;
-						for(std::size_t k = 0; k < bucket.size(); ++k)
+				for(int dx = -1; dx <= 1; ++dx)
+				{
+					for(int dy = -1; dy <= 1; ++dy)
+					{
+						for(int dz = -1; dz <= 1; ++dz)
 						{
-							const int j = bucket[k];
-							if(j <= i){
+							CellKey nkey{c[0] + dx, c[1] + dy, c[2] + dz};
+							auto it = cells.find(nkey);
+							if(it == cells.end()){
 								continue;
 							}
 
-							if((ci - face_centroids.col(j)).squaredNorm() < radius_sqr){
-								pairs.emplace_back(i, j);
+							const std::vector<int> &bucket = it->second;
+							for(std::size_t k = 0; k < bucket.size(); ++k)
+							{
+								const int j = bucket[k];
+								if(j <= i){
+									continue;
+								}
+
+								if((ci - face_centroids.col(j)).squaredNorm() < radius_sqr){
+									pairs.emplace_back(i, j);
+								}
 							}
 						}
 					}
@@ -299,20 +325,32 @@ protected:
 			}
 		}
 
-		const Eigen::Index n_neighbor_pairs = static_cast<Eigen::Index>(pairs.size());
+		Eigen::Index n_neighbor_pairs = 0;
+		for(const auto &pairs : thread_pairs){
+			n_neighbor_pairs += static_cast<Eigen::Index>(pairs.size());
+		}
 		if(n_neighbor_pairs <= 0){
 			return false;
 		}
 
 		neighbor_pairs.resize(2, n_neighbor_pairs);
+		Eigen::Index p = 0;
+		for(auto &pairs : thread_pairs){
+			for(const auto &pair : pairs){
+				neighbor_pairs(0, p) = pair.first;
+				neighbor_pairs(1, p) = pair.second;
+				++p;
+			}
+			std::vector<std::pair<int, int>>().swap(pairs);	// Release each block as soon as it is copied
+		}
+
 		neighbor_dist.resize(n_neighbor_pairs);
-		for(Eigen::Index p = 0; p < n_neighbor_pairs; ++p)
+		OMP_PARALLEL
 		{
-			const int i = pairs[static_cast<std::size_t>(p)].first;
-			const int j = pairs[static_cast<std::size_t>(p)].second;
-			neighbor_pairs(0, p) = i;
-			neighbor_pairs(1, p) = j;
-			neighbor_dist(p) = (face_centroids.col(i) - face_centroids.col(j)).norm();
+			OMP_FOR
+			for(Eigen::Index q = 0; q < n_neighbor_pairs; ++q){
+				neighbor_dist(q) = (face_centroids.col(neighbor_pairs(0, q)) - face_centroids.col(neighbor_pairs(1, q))).norm();
+			}
 		}
 
 		return true;
@@ -499,7 +537,8 @@ private:
 
 		int n_faces = checked_int_count(output_mesh.n_faces(), "face count");
 		Eigen::Matrix3Xd target_plane_local_frames(3, 2 * n_faces);	// Local frame for the target plane of each face
-		std::vector<bool> local_frame_initialized(n_faces, false);
+		// Not std::vector<bool>: its packed bits make concurrent writes from the OpenMP loop below a data race.
+		std::vector<char> local_frame_initialized(n_faces, 0);
 
 		using MatrixX3dRM = Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>;
 		MatrixX3dRM wX0 = vtx_pos.transpose() * w_closeness;	// Part of the linear system right-hand-side that corresponds to initial vertex positions
@@ -510,6 +549,10 @@ private:
 
 		for(int iter = 0; iter < param.mesh_update_iter; ++ iter)
 		{
+			if(cancel_requested()){
+				return false;
+			}
+
 			OMP_PARALLEL
 			{
 				OMP_FOR

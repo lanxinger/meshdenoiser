@@ -42,26 +42,32 @@
 #include <set>
 #include <iostream>
 #include <fstream>
+#include <sstream>
+#include <string>
 #include <algorithm>
 #include <utility>
 #include <limits>
 #include <chrono>
+#include <functional>
 
 #ifdef USE_OPENMP
 #include <omp.h>
 #ifdef USE_MSVC
 #define OMP_PARALLEL __pragma(omp parallel)
 #define OMP_FOR __pragma(omp for)
+#define OMP_FOR_STATIC __pragma(omp for schedule(static))
 #define OMP_SINGLE __pragma(omp single)
 #else
 #define OMP_PARALLEL _Pragma("omp parallel")
 #define OMP_FOR _Pragma("omp for")
+#define OMP_FOR_STATIC _Pragma("omp for schedule(static)")
 #define OMP_SINGLE _Pragma("omp single")
 #endif
 #else
 #include <ctime>
 #define OMP_PARALLEL
 #define OMP_FOR
+#define OMP_FOR_STATIC
 #define OMP_SINGLE
 #endif
 
@@ -119,7 +125,9 @@ public:
 	double linear_solver_tolerance;	// Tolerance for iterative sparse solvers
 
 
-	// Load options from file
+	// Load options from file. Options not present in the file keep their current values.
+	// Unknown option names and unparsable values are errors, so typos cannot silently
+	// fall back to defaults.
 	bool load(const char* filename)
 	{
 	    std::ifstream ifile(filename);
@@ -128,25 +136,35 @@ public:
 	        return false;
 	    }
 
+	    bool success = true;
+	    int line_number = 0;
 	    std::string line;
 	    while(std::getline(ifile, line))
 	    {
-			std::string::size_type pos = line.find_first_not_of(' ');
-			if(pos == std::string::npos){
+			++line_number;
+
+			// Tokenize on any whitespace, so indented, tab-separated and CRLF lines all parse
+			std::istringstream tokens(line);
+			std::string option_str, value_str;
+			if(!(tokens >> option_str) || option_str[0] == '#'){
+				continue;	// Blank or comment line
+			}
+
+			if(!(tokens >> value_str)){
+				std::cerr << "Error: missing value for option " << option_str << " (line " << line_number << ")" << std::endl;
+				success = false;
 				continue;
 			}
 
-			// Check for comment line
-			else if(line.at(pos) == '#'){
-				continue;
-			}
-
-			std::string::size_type end_pos = line.find_first_of(' ');
-			std::string option_str = line.substr(pos, end_pos - pos);
-			std::string value_str = line.substr(end_pos + 1, std::string::npos);
 			OptionInterpreter opt(option_str, value_str);
+			if(!load_option(opt)){
+				std::cerr << "Error: unknown or invalid option " << option_str << " (line " << line_number << ")" << std::endl;
+				success = false;
+			}
+	    }
 
-			load_option(opt);
+	    if(!success){
+	        return false;
 	    }
 
 	    std::cout << "Successfully loaded options from file " << filename << std::endl;
@@ -164,36 +182,42 @@ public:
 		std::cout << std::endl;
 	}
 
+	// A plain `value <= 0` check would let NaN through, since NaN compares false.
+	static bool positive_finite(double value)
+	{
+		return value > 0.0 && std::isfinite(value);
+	}
+
 	// Check whether the parameter values are valid
 	virtual bool valid_parameters() const
 	{
-		if(lambda <= 0.0){
-			std::cerr << "Error: Lambda must be positive" << std::endl;
+		if(!positive_finite(lambda)){
+			std::cerr << "Error: Lambda must be finite and positive" << std::endl;
 			return false;
 		}
 
-		if(eta <= 0.0){
-			std::cerr << "Error: Eta must be positive" << std::endl;
+		if(!positive_finite(eta)){
+			std::cerr << "Error: Eta must be finite and positive" << std::endl;
 			return false;
 		}
 
-		if(mu <= 0.0){
-			std::cerr << "Error: Mu must be positive" << std::endl;
+		if(!positive_finite(mu)){
+			std::cerr << "Error: Mu must be finite and positive" << std::endl;
 			return false;
 		}
 
-		if(nu <= 0.0){
-			std::cerr << "Error: Nu must be positive" << std::endl;
+		if(!positive_finite(nu)){
+			std::cerr << "Error: Nu must be finite and positive" << std::endl;
 			return false;
 		}
 
 		if(max_iter < 1){
-			std::cerr << "Error: MaxIterations must be at least 1" << std::endl;
+			std::cerr << "Error: MaxFilterIterations must be at least 1" << std::endl;
 			return false;
 		}
 
-		if(avg_disp_eps <= 0.0){
-			std::cerr << "Error: average displacement threshold must be positive" << std::endl;
+		if(!positive_finite(avg_disp_eps)){
+			std::cerr << "Error: average displacement threshold must be finite and positive" << std::endl;
 			return false;
 		}
 
@@ -267,7 +291,12 @@ protected:
 		bool load_value(const std::string &str, double &value) const
 		{
 			try{
-				value = std::stod(str);
+				std::size_t parsed_chars = 0;
+				value = std::stod(str, &parsed_chars);
+				if(parsed_chars != str.size()){
+					std::cerr << "Invalid argument: trailing characters in '" << str << "'" << std::endl;
+					return false;
+				}
 			}
 			catch (const std::invalid_argument& ia){
 				std::cerr << "Invalid argument: " << ia.what() << std::endl;
@@ -285,7 +314,12 @@ protected:
 		bool load_value(const std::string &str, int &value) const
 		{
 			try{
-				value = std::stoi(str);
+				std::size_t parsed_chars = 0;
+				value = std::stoi(str, &parsed_chars);
+				if(parsed_chars != str.size()){
+					std::cerr << "Invalid argument: trailing characters in '" << str << "'" << std::endl;
+					return false;
+				}
 			}
 			catch (const std::invalid_argument& ia){
 				std::cerr << "Invalid argument: " << ia.what() << std::endl;
@@ -401,7 +435,30 @@ public:
 		print_progress_ = print_progress;
 	}
 
+	// Polled between solver iterations; returning true aborts the current run,
+	// after which cancelled() reports true.
+	void set_cancel_check(std::function<bool()> cancel_check)
+	{
+		cancel_check_ = std::move(cancel_check);
+	}
+
+	bool cancelled() const
+	{
+		return cancelled_;
+	}
+
 protected:
+
+	std::function<bool()> cancel_check_;
+	bool cancelled_ = false;
+
+	bool cancel_requested()
+	{
+		if(!cancelled_ && cancel_check_ && cancel_check_()){
+			cancelled_ = true;
+		}
+		return cancelled_;
+	}
 
 	bool filter(Parameters param)
 	{
@@ -425,7 +482,9 @@ protected:
 
 		std::cout << "Filtering......" << std::endl;
 
-		fixedpoint_solver(param);
+		if(!fixedpoint_solver(param)){
+			return false;	// Cancelled
+		}
 
 		Timer::EventID filter_end_time = timer.get_time();
 		stats_.preprocessing_secs = timer.elapsed_time(begin_time, preprocess_end_time);
@@ -440,7 +499,8 @@ protected:
 	}
 
 
-	void fixedpoint_solver(const Parameters &param)
+	// Returns false if the run was cancelled.
+	bool fixedpoint_solver(const Parameters &param)
 	{
 		// Store signals in the previous iteration
 		Eigen::MatrixXd init_signals = signals_;
@@ -464,6 +524,10 @@ protected:
 
 		for(int num_iter = 1; num_iter <= param.max_iter; ++ num_iter)
 		{
+			if(cancel_requested()){
+				return false;
+			}
+
 			prev_signals = signals_;
 			filtered_signals = weighted_init_signals;
 
@@ -527,6 +591,8 @@ protected:
 				break;
 			}
 		}
+
+		return true;
 	}
 
 
@@ -540,7 +606,6 @@ protected:
 		// Initialize the solver with matrix
 		bool compute(const SparseMatrixXd &A)
 		{
-			cached_matrix_ = A;
 			if(solver_type_ == Parameters::LDLT)
 			{
 				if(!pattern_analyzed)
@@ -637,7 +702,6 @@ protected:
 		Eigen::ConjugateGradient<SparseMatrixXd, Eigen::Lower | Eigen::Upper, Eigen::IncompleteCholesky<double> > CG_solver_;
 		int solver_max_iterations_;
 		double solver_tolerance_;
-		SparseMatrixXd cached_matrix_;
 
 		bool pattern_analyzed;	// Flag for symbolic factorization
 
@@ -704,8 +768,9 @@ protected:
 	Eigen::VectorXd precomputed_area_spatial_guidance_weights_;	// Precomputed weights (area, spatial Gaussian and guidance Gaussian) for neighboring pairs
 
 	// The neighborhood information for each signal element is stored as contiguous columns within the neighborhood_info_ matrix
-	// For each column, the first element is the index of a neighboring element, the second one is the corresponding address within array neighboring_pairs_
-	Matrix2XIdx neighborhood_info_;
+	// For each column, the first element is the index of a neighboring element, the second one is the corresponding address within array neighboring_pairs_.
+	// Stored as int: this array has two columns per neighbor pair and dominates memory use on large meshes.
+	Eigen::Matrix2Xi neighborhood_info_;
 	VectorXIdx neighborhood_info_boundaries_;		// Boundary positions for the neighborhood information segments
 
 	bool print_progress_;
@@ -747,6 +812,10 @@ protected:
 
 		Eigen::Index n_neighbor_pairs = neighboring_pairs_.cols();
 		if(n_neighbor_pairs <= 0){
+			return false;
+		}
+		if(n_neighbor_pairs > std::numeric_limits<int>::max() / 2){
+			std::cerr << "Error: too many neighbor pairs (" << n_neighbor_pairs << "); reduce Eta" << std::endl;
 			return false;
 		}
 
@@ -804,11 +873,11 @@ protected:
 
 			Eigen::Index pos1 = cursor[static_cast<std::size_t>(idx1)]++;
 			neighborhood_info_(0, pos1) = idx2;
-			neighborhood_info_(1, pos1) = i;
+			neighborhood_info_(1, pos1) = static_cast<int>(i);
 
 			Eigen::Index pos2 = cursor[static_cast<std::size_t>(idx2)]++;
 			neighborhood_info_(0, pos2) = idx1;
-			neighborhood_info_(1, pos2) = i;
+			neighborhood_info_(1, pos2) = static_cast<int>(i);
 		}
 
 		return true;

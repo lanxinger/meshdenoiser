@@ -83,6 +83,22 @@ bool has_extension(const std::string &path, const std::string &ext)
 	return to_lower_copy(path.substr(path.size() - ext.size())) == ext;
 }
 
+bool parse_export_precision(const std::string &text, int &precision)
+{
+	try{
+		std::size_t parsed_chars = 0;
+		const int value = std::stoi(text, &parsed_chars);
+		if(parsed_chars != text.size() || value < 1 || value > 17){
+			return false;
+		}
+		precision = value;
+		return true;
+	}
+	catch(const std::exception &){
+		return false;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CLI helpers
 // ---------------------------------------------------------------------------
@@ -178,7 +194,8 @@ void print_help(const char *exe_name)
 	std::cout << std::endl;
 	std::cout << "Positional arguments:" << std::endl;
 	std::cout << "  OPTION_FILE               Optional. Path to denoising options text file." << std::endl;
-	std::cout << "                            If omitted, built-in defaults are used." << std::endl;
+	std::cout << "                            If omitted, built-in defaults are used. Options not" << std::endl;
+	std::cout << "                            listed in the file also keep their built-in defaults." << std::endl;
 	std::cout << "  INPUT_MESH                Required. Input mesh to denoise." << std::endl;
 	std::cout << "  OUTPUT_MESH               Required. Output mesh path." << std::endl;
 	std::cout << std::endl;
@@ -188,7 +205,7 @@ void print_help(const char *exe_name)
 	std::cout << "  USD (.usd, .usda, .usdc, .usdz)" << std::endl;
 	std::cout << std::endl;
 	std::cout << "Optional flags:" << std::endl;
-	std::cout << "  --export-precision N      Vertex coordinate precision for output. Default: 16." << std::endl;
+	std::cout << "  --export-precision N      Vertex coordinate precision for output (1-17). Default: 16." << std::endl;
 	std::cout << "  --metrics-json PATH       Write JSON timing and solver metrics." << std::endl;
 	std::cout << "  --metrics-csv PATH        Append CSV timing and solver metrics." << std::endl;
 	std::cout << "  --deterministic           Force deterministic single-threaded runtime." << std::endl;
@@ -207,6 +224,69 @@ bool validate_mesh_vertices(const TriMesh &mesh)
 		const auto &pt = mesh.point(*v_it);
 		if(!std::isfinite(pt[0]) || !std::isfinite(pt[1]) || !std::isfinite(pt[2])){
 			std::cerr << "Error: non-finite vertex coordinate at index " << v_it->idx() << std::endl;
+			return false;
+		}
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Vertex welding
+// ---------------------------------------------------------------------------
+
+// Builds a copy of `mesh` in which vertices with identical positions are merged, so that
+// UV/normal seams and per-face vertex soups (common in glTF and flat-shaded exports) become
+// connected surfaces for the filter. welded_vertex[i] is the welded index of input vertex i.
+// Returns false, leaving the caller to filter `mesh` as is, when nothing is coincident or
+// when merging would produce a face OpenMesh cannot represent (degenerate or non-manifold).
+bool weld_coincident_vertices(const TriMesh &mesh, TriMesh &welded, std::vector<int> &welded_vertex)
+{
+	struct PointHash
+	{
+		size_t operator()(const TriMesh::Point &p) const noexcept
+		{
+			std::hash<double> hash;
+			size_t h = hash(p[0]);
+			h ^= hash(p[1]) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+			h ^= hash(p[2]) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+			return h;
+		}
+	};
+
+	std::unordered_map<TriMesh::Point, int, PointHash> index_of_point;
+	index_of_point.reserve(mesh.n_vertices());
+	welded_vertex.assign(mesh.n_vertices(), -1);
+	std::vector<TriMesh::Point> welded_points;
+	welded_points.reserve(mesh.n_vertices());
+	for(auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it){
+		const TriMesh::Point &point = mesh.point(*v_it);
+		auto inserted = index_of_point.emplace(point, static_cast<int>(welded_points.size()));
+		if(inserted.second){
+			welded_points.push_back(point);
+		}
+		welded_vertex[v_it->idx()] = inserted.first->second;
+	}
+	if(welded_points.size() == mesh.n_vertices()){
+		return false;
+	}
+
+	welded.clear();
+	std::vector<TriMesh::VertexHandle> handles;
+	handles.reserve(welded_points.size());
+	for(const TriMesh::Point &point : welded_points){
+		handles.push_back(welded.add_vertex(point));
+	}
+	for(auto f_it = mesh.faces_begin(); f_it != mesh.faces_end(); ++f_it){
+		std::array<TriMesh::VertexHandle, 3> face_vertices;
+		int k = 0;
+		for(auto fv_it = mesh.cfv_iter(*f_it); fv_it.is_valid() && k < 3; ++fv_it){
+			face_vertices[k++] = handles[welded_vertex[fv_it->idx()]];
+		}
+		if(k != 3 || face_vertices[0] == face_vertices[1] || face_vertices[1] == face_vertices[2] ||
+		   face_vertices[0] == face_vertices[2]){
+			return false;
+		}
+		if(!welded.add_face(face_vertices[0], face_vertices[1], face_vertices[2]).is_valid()){
 			return false;
 		}
 	}
@@ -430,18 +510,9 @@ bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &war
 	mesh.request_face_normals();
 	mesh.request_vertex_normals();
 
-	using VertexKey = std::pair<size_t, uint32_t>;
-	struct KeyHash
-	{
-		size_t operator()(const VertexKey &key) const noexcept
-		{
-			return std::hash<size_t>()(key.first) ^ (static_cast<size_t>(key.second) << 1);
-		}
-	};
+	// Vertex handle of each POSITION element of the current primitive instance.
+	std::vector<TriMesh::VertexHandle> vertex_cache;
 
-	std::unordered_map<VertexKey, TriMesh::VertexHandle, KeyHash> vertex_cache;
-
-	size_t instance_id = 0;
 	for(const PrimitiveInstance &instance : instances){
 		const tg3_primitive &primitive = *instance.primitive;
 		int32_t position_accessor_index = -1;
@@ -480,6 +551,12 @@ bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &war
 			error = "Unable to read index data from glTF primitive.";
 			return false;
 		}
+		// Checking the last element bounds count by the buffer size before sizing the cache.
+		if(position_accessor.count == 0 || !accessor_element_ptr(model, position_accessor, position_accessor.count - 1)){
+			error = "Truncated POSITION data in glTF accessor.";
+			return false;
+		}
+		vertex_cache.assign(static_cast<size_t>(position_accessor.count), TriMesh::VertexHandle());
 		if(index_accessor.count % 3 != 0){
 			warning += "glTF primitive indices are not a multiple of three; trailing vertices will be ignored.\n";
 		}
@@ -500,9 +577,8 @@ bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &war
 					return false;
 				}
 
-				VertexKey key(instance_id, vertex_index);
-				auto cache_it = vertex_cache.find(key);
-				if(cache_it == vertex_cache.end()){
+				TriMesh::VertexHandle &cached = vertex_cache[vertex_index];
+				if(!cached.is_valid()){
 					Eigen::Vector3d position;
 					if(!read_position(model, position_accessor, vertex_index, position)){
 						error = "Truncated POSITION data in glTF accessor.";
@@ -513,19 +589,16 @@ bool load_gltf_mesh(const std::string &filename, TriMesh &mesh, std::string &war
 					Eigen::Vector4d transformed = instance.transform * p;
 					TriMesh::Point point(transformed.x(), transformed.y(), transformed.z());
 
-					TriMesh::VertexHandle vh = mesh.add_vertex(point);
-					cache_it = vertex_cache.emplace(key, vh).first;
+					cached = mesh.add_vertex(point);
 				}
 
-				face_vertices[k] = cache_it->second;
+				face_vertices[k] = cached;
 			}
 
 			if(!mesh.add_face(face_vertices[0], face_vertices[1], face_vertices[2]).is_valid()){
 				warning += "Skipped a degenerate triangle during glTF import.\n";
 			}
 		}
-
-		++instance_id;
 	}
 
 	if(mesh.n_faces() == 0){
@@ -591,20 +664,57 @@ bool load_usd_mesh(const std::string &filename, TriMesh &mesh, std::string &warn
 		return false;
 	}
 
+	// tydra keeps mesh points in local space; place each mesh with the world matrix of every
+	// node that references it. Meshes no node references are imported untransformed.
+	struct MeshInstance
+	{
+		size_t mesh_index;
+		value::matrix4d world;
+	};
+	std::vector<MeshInstance> instances;
+	std::vector<bool> mesh_referenced(render_scene.meshes.size(), false);
+	std::vector<const tydra::Node *> pending_nodes;
+	for(const tydra::Node &root : render_scene.nodes){
+		pending_nodes.push_back(&root);
+	}
+	while(!pending_nodes.empty()){
+		const tydra::Node *node = pending_nodes.back();
+		pending_nodes.pop_back();
+		if(node->nodeType == tydra::NodeType::Mesh && node->id >= 0 &&
+		   static_cast<size_t>(node->id) < render_scene.meshes.size()){
+			instances.push_back({static_cast<size_t>(node->id), node->global_matrix});
+			mesh_referenced[static_cast<size_t>(node->id)] = true;
+		}
+		for(const tydra::Node &child : node->children){
+			pending_nodes.push_back(&child);
+		}
+	}
+	for(size_t i = 0; i < render_scene.meshes.size(); ++i){
+		if(!mesh_referenced[i]){
+			instances.push_back({i, value::matrix4d()});
+		}
+	}
+
 	mesh.clear();
 	mesh.request_face_normals();
 	mesh.request_vertex_normals();
 
-	for(const auto &render_mesh : render_scene.meshes){
+	for(const MeshInstance &instance : instances){
+		const auto &render_mesh = render_scene.meshes[instance.mesh_index];
 		if(render_mesh.points.empty()){
 			continue;
 		}
 
+		// USD matrices act on row vectors: p' = p * M, with the translation in the last row.
+		const auto &m = instance.world.m;
 		std::vector<TriMesh::VertexHandle> vertex_handles;
 		vertex_handles.reserve(render_mesh.points.size());
 
 		for(const auto &point : render_mesh.points){
-			TriMesh::Point p(point[0], point[1], point[2]);
+			const double x = point[0], y = point[1], z = point[2];
+			TriMesh::Point p(x * m[0][0] + y * m[1][0] + z * m[2][0] + m[3][0],
+			                 x * m[0][1] + y * m[1][1] + z * m[2][1] + m[3][1],
+			                 x * m[0][2] + y * m[1][2] + z * m[2][2] + m[3][2]);
 			vertex_handles.push_back(mesh.add_vertex(p));
 		}
 
@@ -626,27 +736,14 @@ bool load_usd_mesh(const std::string &filename, TriMesh &mesh, std::string &warn
 
 		size_t index_offset = 0;
 		for(uint32_t count : *face_counts){
-			if(count == 3){
-				std::vector<TriMesh::VertexHandle> face_verts;
-				face_verts.reserve(3);
-
-				bool valid = true;
-				for(uint32_t i = 0; i < 3; ++i){
-					uint32_t idx = (*face_indices)[index_offset + i];
-					if(idx >= vertex_handles.size()){
-						valid = false;
-						break;
-					}
-					face_verts.push_back(vertex_handles[idx]);
-				}
-
-				if(valid){
-					mesh.add_face(face_verts);
-				}
+			if(count > face_indices->size() - index_offset){
+				error = "USD face vertex counts exceed the face vertex index array.";
+				return false;
 			}
-			else if(count > 3){
-				std::vector<uint32_t> poly_indices;
-				poly_indices.reserve(count);
+
+			if(count >= 3){
+				std::vector<TriMesh::VertexHandle> polygon;
+				polygon.reserve(count);
 
 				bool valid = true;
 				for(uint32_t i = 0; i < count; ++i){
@@ -655,17 +752,12 @@ bool load_usd_mesh(const std::string &filename, TriMesh &mesh, std::string &warn
 						valid = false;
 						break;
 					}
-					poly_indices.push_back(idx);
+					polygon.push_back(vertex_handles[idx]);
 				}
 
-				if(valid){
-					for(uint32_t i = 1; i + 1 < count; ++i){
-						std::vector<TriMesh::VertexHandle> face_verts;
-						face_verts.push_back(vertex_handles[poly_indices[0]]);
-						face_verts.push_back(vertex_handles[poly_indices[i]]);
-						face_verts.push_back(vertex_handles[poly_indices[i + 1]]);
-						mesh.add_face(face_verts);
-					}
+				// Fan-triangulate polygons; triangles are the single-fan case.
+				for(uint32_t i = 1; valid && i + 1 < count; ++i){
+					mesh.add_face(polygon[0], polygon[i], polygon[i + 1]);
 				}
 			}
 
@@ -704,6 +796,10 @@ bool load_mesh(const std::string &filename, TriMesh &mesh)
 		if(!success){
 			error = "unable to read input mesh with OpenMesh";
 		}
+		else if(mesh.n_faces() == 0){
+			success = false;
+			error = "input mesh contains no faces";
+		}
 	}
 
 	if(!warning.empty()){
@@ -717,10 +813,30 @@ bool load_mesh(const std::string &filename, TriMesh &mesh)
 	return success;
 }
 
+int run(int argc, char **argv);
+
 } // anonymous namespace
 
 
 int main(int argc, char **argv)
+{
+	try{
+		return run(argc, argv);
+	}
+	catch(const std::exception &e){
+		std::cerr << "Error: " << e.what() << std::endl;
+	}
+	catch(...){
+		std::cerr << "Error: unexpected failure" << std::endl;
+	}
+	return 1;
+}
+
+
+namespace
+{
+
+int run(int argc, char **argv)
 {
 	if(argc == 1)
 	{
@@ -799,7 +915,10 @@ int main(int argc, char **argv)
 	{
 		std::string arg = argv[i];
 		if(arg == "--export-precision" && i + 1 < argc){
-			export_precision = std::stoi(argv[++i]);
+			if(!parse_export_precision(argv[++i], export_precision)){
+				std::cerr << "Error: --export-precision expects an integer between 1 and 17, got " << argv[i] << std::endl;
+				return 1;
+			}
 		}
 		else if(arg == "--metrics-json" && i + 1 < argc){
 			metrics_json_path = argv[++i];
@@ -840,10 +959,12 @@ int main(int argc, char **argv)
 #endif
 
 	// Load options
+	// Start from the tuned defaults so that options omitted from a file keep them,
+	// rather than the much stronger SDFilter class defaults.
 	SDFilter::MeshDenoisingParameters param;
+	apply_default_options(param);
 	if(using_builtin_defaults)
 	{
-		apply_default_options(param);
 		std::cout << "No option file specified; using built-in default denoising options." << std::endl;
 	}
 	else if(!param.load(options_path.c_str())){
@@ -860,15 +981,29 @@ int main(int argc, char **argv)
 	configure_deterministic_runtime(param.deterministic_mode);
 	param.output();
 
+	// Filter a welded copy when the input splits coincident vertices (seams, triangle soups);
+	// results are copied back so the output keeps the input's vertices and faces.
+	TriMesh welded_mesh;
+	std::vector<int> welded_vertex;
+	const bool use_welded = weld_coincident_vertices(mesh, welded_mesh, welded_vertex);
+	if(use_welded){
+		std::cout << "Merged coincident vertices for filtering: " << mesh.n_vertices() << " -> "
+		          << welded_mesh.n_vertices() << " vertices." << std::endl;
+	}
+	TriMesh &filter_mesh = use_welded ? welded_mesh : mesh;
+
 	// Normalize the input mesh
 	Eigen::Vector3d original_center;
 	double original_scale;
 	auto normalize_begin = Clock::now();
-	SDFilter::normalize_mesh(mesh, original_center, original_scale);
+	if(!SDFilter::normalize_mesh(filter_mesh, original_center, original_scale)){
+		std::cerr << "Error: input mesh has zero extent; nothing to denoise." << std::endl;
+		return 1;
+	}
 	auto normalize_end = Clock::now();
 
 	// Filter the normals and construct the output mesh
-	SDFilter::MeshNormalDenoising denoiser(mesh);
+	SDFilter::MeshNormalDenoising denoiser(filter_mesh);
 	denoiser.set_print_progress(true);
 	TriMesh output_mesh;
 	auto denoise_begin = Clock::now();
@@ -880,6 +1015,13 @@ int main(int argc, char **argv)
 
 	auto restore_begin = Clock::now();
 	SDFilter::restore_mesh(output_mesh, original_center, original_scale);
+	if(use_welded){
+		TriMesh unwelded_output = mesh;
+		for(auto v_it = unwelded_output.vertices_begin(); v_it != unwelded_output.vertices_end(); ++v_it){
+			unwelded_output.set_point(*v_it, output_mesh.point(TriMesh::VertexHandle(welded_vertex[v_it->idx()])));
+		}
+		output_mesh = std::move(unwelded_output);
+	}
 	auto restore_end = Clock::now();
 
 	// Save output mesh
@@ -930,3 +1072,5 @@ int main(int argc, char **argv)
 
 	return 0;
 }
+
+} // anonymous namespace

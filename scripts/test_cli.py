@@ -340,6 +340,153 @@ class CLIParityTests(unittest.TestCase):
                     )
                     self.assertIn(message, result.stderr)
 
+    def run_cli_with_options(self, options_text, source, output):
+        options = output.parent / "options.txt"
+        options.write_text(options_text, newline="")
+        result = subprocess.run(
+            [str(EXECUTABLE), str(options), str(source), str(output), "--deterministic"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertNotIn("runtime error:", result.stderr)
+        return result
+
+    def assert_matches_golden(self, output):
+        actual, _ = read_obj(output)
+        expected, _ = read_obj(FIXTURES / "golden_denoised.obj")
+        self.assertEqual(len(actual), len(expected))
+        max_error = max(
+            abs(got - want)
+            for point, target in zip(actual, expected)
+            for got, want in zip(point, target)
+        )
+        self.assertLess(max_error, 1e-6, f"maximum coordinate error: {max_error}")
+
+    def test_option_files_tolerate_whitespace_and_keep_builtin_defaults(self):
+        # Indented, tab-separated and CRLF lines must parse, and options the file
+        # omits must keep the tuned defaults, so this file reproduces the golden output.
+        text = "# comment\r\n\t# indented comment\r\n  Lambda\t0.15\r\nOuterIterations 1\r\n\r\n"
+        with tempfile.TemporaryDirectory() as name:
+            output = Path(name) / "denoised.obj"
+            result = self.run_cli_with_options(text, FIXTURES / "noisy_icosphere.obj", output)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assert_matches_golden(output)
+
+    def test_option_files_reject_unknown_and_invalid_values(self):
+        for text in ["Lamda 0.2\n", "Lambda nan\n", "Eta 2,2\n", "Lambda\n", "Nu -1\n"]:
+            with self.subTest(text=text):
+                with tempfile.TemporaryDirectory() as name:
+                    output = Path(name) / "denoised.obj"
+                    result = self.run_cli_with_options(
+                        text, FIXTURES / "noisy_icosphere.obj", output
+                    )
+                    self.assertGreater(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertFalse(output.exists())
+                    self.assertIn("Error", result.stderr)
+
+    def test_invalid_arguments_and_faceless_meshes_fail_cleanly(self):
+        positions, _ = read_obj(FIXTURES / "noisy_icosphere.obj")
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            output = directory / "denoised.obj"
+            for precision in ["abc", "0", "12x"]:
+                with self.subTest(precision=precision):
+                    result = subprocess.run(
+                        [str(EXECUTABLE), str(FIXTURES / "noisy_icosphere.obj"), str(output),
+                         "--export-precision", precision],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("--export-precision", result.stderr)
+            faceless = directory / "faceless.obj"
+            write_obj(faceless, positions, [])
+            result = self.run_cli(faceless, output)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("no faces", result.stderr)
+            self.assertFalse(output.exists())
+
+    def test_unwelded_triangle_soups_match_connected_mesh(self):
+        # Flat-shaded exports give every triangle its own vertices; the CLI must
+        # filter them as one surface and keep the input's vertex layout.
+        positions, faces = read_obj(FIXTURES / "noisy_icosphere.obj")
+        soup_positions = [positions[index] for face in faces for index in face]
+        soup_faces = [(3 * i, 3 * i + 1, 3 * i + 2) for i in range(len(faces))]
+        golden, _ = read_obj(FIXTURES / "golden_denoised.obj")
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            soup_obj = directory / "soup.obj"
+            write_obj(soup_obj, soup_positions, soup_faces)
+            soup_glb = directory / "soup.glb"
+            write_glb(soup_glb, *mesh_document(soup_positions, soup_faces, 5125))
+            for source in [soup_obj, soup_glb]:
+                with self.subTest(source=source.name):
+                    output = directory / (source.stem + "-" + source.suffix[1:] + ".obj")
+                    result = self.run_cli(source, output)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    actual, actual_faces = read_obj(output)
+                    self.assertEqual(len(actual), len(soup_positions))
+                    self.assertEqual(actual_faces, soup_faces)
+                    max_error = max(
+                        abs(actual[3 * i + k][axis] - golden[face[k]][axis])
+                        for i, face in enumerate(faces)
+                        for k in range(3)
+                        for axis in range(3)
+                    )
+                    self.assertLess(max_error, 1e-6, f"soup/golden error: {max_error}")
+
+    def test_usd_applies_xform_hierarchy(self):
+        positions, faces = read_obj(FIXTURES / "noisy_icosphere.obj")
+        # USD points are float32; round the reference the same way.
+        local = [struct.unpack("<3f", struct.pack("<3f", *point)) for point in positions]
+        points = ", ".join("(%r, %r, %r)" % point for point in local)
+        counts = ", ".join("3" for _ in faces)
+        indices = ", ".join(str(index) for face in faces for index in face)
+        document = f"""#usda 1.0
+(
+    defaultPrim = "Root"
+)
+def Xform "Root"
+{{
+    double3 xformOp:translate = (0, 5, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    def Xform "Child"
+    {{
+        double3 xformOp:translate = (100, 0, 0)
+        float xformOp:rotateZ = 90
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZ"]
+        def Mesh "Sphere"
+        {{
+            int[] faceVertexCounts = [{counts}]
+            int[] faceVertexIndices = [{indices}]
+            point3f[] points = [{points}]
+        }}
+    }}
+}}
+"""
+        # rotateZ(90) then translate (100, 0, 0), then the parent's (0, 5, 0).
+        transformed = [(100 - y, x + 5, z) for x, y, z in local]
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            asset = directory / "xform.usda"
+            asset.write_text(document)
+            reference = directory / "reference.obj"
+            write_obj(reference, transformed, faces)
+            outputs = []
+            for source in [reference, asset]:
+                output = directory / (source.stem + "-denoised.obj")
+                result = self.run_cli(source, output)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                outputs.append(read_obj(output)[0])
+            expected, actual = outputs
+            self.assertEqual(len(actual), len(expected))
+            max_error = max(
+                abs(got - want)
+                for point, target in zip(actual, expected)
+                for got, want in zip(point, target)
+            )
+            self.assertLess(max_error, 1e-5, f"USD/OBJ maximum coordinate error: {max_error}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
