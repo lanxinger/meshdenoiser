@@ -71,8 +71,10 @@ let denoised = try await MeshDenoiser.denoise(
 ```
 
 Cancellation: cancel the surrounding `Task`; the call throws `CancellationError`
-(checked after each outer iteration). For very large meshes (>~500k vertices) set
-`params.linearSolver = .conjugateGradient` to reduce memory use.
+(checked between solver iterations). Memory use of the reference backend is dominated
+by the filter's neighbor pairs, which grow with face count × `eta`²: about 1.5 GB for a
+327K-face mesh at the default `eta` (0.7 GB at `eta = 1`). Lower `eta` to reduce it; the
+choice of linear solver makes little difference to memory.
 
 On macOS, app code that works with USD/USDZ assets can use the ModelIO/SceneKit
 adapter directly:
@@ -247,6 +249,8 @@ the stable OpenMesh 11.0 release.
 
 The defaults are tuned for detail-preserving cleanup. Generate a commented template with
 `MeshDenoiser --write-default-options options.txt`, or see `MeshDenoiserDefaults.txt`.
+Options files hold one `Name value` pair per line (spaces or tabs); options a file
+omits keep the defaults below, and unknown names or unparsable values are errors.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -265,8 +269,8 @@ The defaults are tuned for detail-preserving cleanup. Generate a commented templ
 
 | Library | Version | Type | Notes |
 |---------|---------|------|-------|
-| **Eigen** | 3.4.1 | Vendored, header-only | Shared by CMake and SwiftPM; override CLI headers with `-DEIGEN3_INCLUDE_DIR=...` |
-| **OpenMesh (CMake CLI)** | 11.0 | Fetched automatically | Stable release used for mesh data and traditional format I/O |
+| **Eigen** | 5.0.1 | Vendored, header-only | Shared by CMake and SwiftPM; override CLI headers with `-DEIGEN3_INCLUDE_DIR=...` |
+| **OpenMesh (CMake CLI)** | 11.0 | Fetched automatically (SHA-256 pinned), linked statically | Stable release used for mesh data and traditional format I/O |
 | **OpenMesh Core (SwiftPM)** | `cb4e9528` | Vendored | Immutable upstream snapshot used by the reference backend |
 | **tinygltf** | 3.0.1 | Fetched automatically | C11 glTF 2.0 parser; indexed triangles with dense float32 positions |
 | **tinyusdz** | 0.9.1 | Fetched automatically | USD format support |
@@ -296,7 +300,11 @@ ctest --test-dir build --output-on-failure
 ./build/MeshDenoiser --help
 ```
 
-For OpenMP on macOS, install `gcc` and configure with `-DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14`.
+For OpenMP on macOS, `brew install libomp` and add to the configure command:
+`-DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I$(brew --prefix libomp)/include" -DOpenMP_CXX_LIB_NAMES=omp -DOpenMP_omp_LIBRARY=$(brew --prefix libomp)/lib/libomp.dylib`.
+
+Release builds target the generic CPU of the platform so binaries run anywhere. For a
+local build tuned to your own CPU, add `-DMESHDENOISER_NATIVE_ARCH=ON` (do not distribute it).
 
 ### Windows (MSVC)
 ```powershell
@@ -308,13 +316,16 @@ ctest --test-dir build -C Release --output-on-failure
 ## Input Format Notes
 
 - For **glTF** and **USD** files with multiple meshes or transforms, all geometry is combined and transforms are applied automatically before filtering.
+- Vertices that share an exact position (UV/normal seams, flat-shaded triangle soups) are merged for filtering, so seams are not treated as open boundaries. The output keeps the input's vertices and faces.
 - glTF imports support indexed triangles with dense float32 positions and 8-, 16-, or 32-bit unsigned indices. Sparse accessors and nonindexed primitives are rejected explicitly.
 - Output format is determined by file extension (e.g., `.obj`, `.ply`, `.stl`).
 
 ## CI / Pre-built Binaries
 
-GitHub Actions builds and uploads artifacts for Ubuntu, macOS, and Windows.
-Download from the [Releases page](../../releases).
+GitHub Actions builds and uploads artifacts for Ubuntu, macOS, and Windows. The
+binaries link OpenMesh statically and are built without CPU-specific tuning, so each
+archive contains a single self-contained executable. Download from the
+[Releases page](../../releases).
 
 ### macOS Security Note
 
