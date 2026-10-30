@@ -70,9 +70,14 @@ add_executable(MeshDenoiser
 )
 
 # Per-target compiler flags
+# Tuning for the build machine's CPU makes binaries crash (illegal instruction) on older CPUs,
+# so it is opt-in and must stay off for distributed builds.
+option(MESHDENOISER_NATIVE_ARCH "Optimize Release builds for this machine's CPU (-march=native)" OFF)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|AppleClang")
   target_compile_options(MeshDenoiser PRIVATE -Wall -Wextra)
-  target_compile_options(MeshDenoiser PRIVATE "$<$<CONFIG:Release>:-march=native;-mtune=native>")
+  if(MESHDENOISER_NATIVE_ARCH)
+    target_compile_options(MeshDenoiser PRIVATE "$<$<CONFIG:Release>:-march=native;-mtune=native>")
+  endif()
 elseif(MSVC)
   target_compile_definitions(MeshDenoiser PRIVATE USE_MSVC _USE_MATH_DEFINES)
 endif()
@@ -83,9 +88,23 @@ target_include_directories(MeshDenoiser PRIVATE
   "${tinyusdz_SOURCE_DIR}/src"
 )
 
+# OpenMesh builds both shared and static libraries outside Windows; link the static one so
+# the CLI is self-contained (Windows builds OpenMeshCore as a static library by default).
+# Static links need OM_STATIC_BUILD, or the linker drops OpenMesh's self-registering
+# file readers and writers ("No reading modules available").
+if(TARGET OpenMeshCoreStatic)
+  set(MESHDENOISER_OPENMESH_TARGET OpenMeshCoreStatic)
+  target_compile_definitions(MeshDenoiser PRIVATE OM_STATIC_BUILD)
+else()
+  set(MESHDENOISER_OPENMESH_TARGET OpenMeshCore)
+  if(NOT OPENMESH_BUILD_SHARED)
+    target_compile_definitions(MeshDenoiser PRIVATE OM_STATIC_BUILD)
+  endif()
+endif()
+
 target_link_libraries(MeshDenoiser PRIVATE
   Eigen3::Eigen
-  OpenMeshCore
+  ${MESHDENOISER_OPENMESH_TARGET}
   tinygltf_runtime
   tinyusdz_static
 )

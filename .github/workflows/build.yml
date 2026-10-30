@@ -8,8 +8,9 @@ on:
   release:
     types: [ published ]
 
+# Read-only by default; only the release job below can write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -31,24 +32,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
-      - name: Install dependencies (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake patchelf
-
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install cmake
-
+      # CMake and the C/C++ toolchains are preinstalled on GitHub-hosted runners.
+      # MESHDENOISER_NATIVE_ARCH stays off so the binaries run on any CPU of the target arch.
       - name: Configure CMake
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -57,48 +48,30 @@ jobs:
         run: |
           cmake --build build --config ${{ matrix.build_type }} -j
 
-      - name: Verify CLI golden parity and GLB fixtures
+      - name: Verify CLI golden parity and import fixtures
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
 
       - name: Prepare artifacts (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           mkdir -p artifacts
-          find build -name MeshDenoiser -type f -exec cp {} artifacts/ \;
-          cp MeshDenoiserDefaults.txt artifacts/
-          cp README.md artifacts/
+          cp build/MeshDenoiser artifacts/
+          cp MeshDenoiserDefaults.txt README.md artifacts/
           cp -R LICENSES artifacts/
           chmod +x artifacts/MeshDenoiser
 
-          # Bundle OpenMesh libraries and fix rpath
+          # OpenMesh is linked statically; fail if the binary still needs its shared libraries.
           if [ "$RUNNER_OS" == "macOS" ]; then
-            mkdir -p artifacts/lib
-            find build -name "libOpenMesh*.dylib" -exec cp {} artifacts/lib/ \;
-
-            for exe in artifacts/MeshDenoiser; do
-              if [ -f "$exe" ]; then
-                otool -L "$exe" | grep libOpenMesh | awk '{print $1}' | while read lib; do
-                  libname=$(basename "$lib")
-                  install_name_tool -change "$lib" "@executable_path/lib/$libname" "$exe"
-                done
-                codesign --force --deep --sign - "$exe"
-              fi
-            done
-
-            for lib in artifacts/lib/*.dylib; do
-              if [ -f "$lib" ]; then
-                codesign --force --sign - "$lib"
-              fi
-            done
-          elif [ "$RUNNER_OS" == "Linux" ]; then
-            mkdir -p artifacts/lib
-            find build -name "libOpenMesh*.so*" -exec cp {} artifacts/lib/ \;
-
-            for exe in artifacts/MeshDenoiser; do
-              if [ -f "$exe" ]; then
-                patchelf --set-rpath '$ORIGIN/lib' "$exe" || true
-              fi
-            done
+            linked_libraries=$(otool -L artifacts/MeshDenoiser)
+          else
+            linked_libraries=$(ldd artifacts/MeshDenoiser)
+          fi
+          if echo "$linked_libraries" | grep -i openmesh; then
+            echo "MeshDenoiser must not depend on OpenMesh shared libraries" >&2
+            exit 1
+          fi
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            codesign --force --sign - artifacts/MeshDenoiser
           fi
 
       - name: Prepare artifacts (Windows)
@@ -111,42 +84,46 @@ jobs:
           Copy-Item LICENSES -Destination artifacts\LICENSES -Recurse
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: artifacts/
           retention-days: 30
 
-      - name: Create release archive (Linux/macOS)
-        if: github.event_name == 'release' && runner.os != 'Windows'
-        run: |
-          cd artifacts
-          tar -czf ../${{ matrix.artifact_name }}.tar.gz *
-
-      - name: Create release archive (Windows)
-        if: github.event_name == 'release' && runner.os == 'Windows'
-        run: |
-          cd artifacts
-          Compress-Archive -Path * -DestinationPath ..\${{ matrix.artifact_name }}.zip
-
-      - name: Upload to release (Linux/macOS)
-        if: github.event_name == 'release' && runner.os != 'Windows'
-        uses: softprops/action-gh-release@v2
+  release:
+    name: Attach binaries to release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
         with:
-          files: ${{ matrix.artifact_name }}.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
+          path: dist
 
-      - name: Upload to release (Windows)
-        if: github.event_name == 'release' && runner.os == 'Windows'
-        uses: softprops/action-gh-release@v2
+      - name: Create release archives
+        run: |
+          # Artifact uploads do not keep file modes, so restore the executable bit first.
+          for name in meshdenoiser-linux meshdenoiser-macos; do
+            chmod +x "dist/$name/MeshDenoiser"
+            (cd "dist/$name" && tar -czf "../../$name.tar.gz" *)
+          done
+          (cd dist/meshdenoiser-windows && zip -r ../../meshdenoiser-windows.zip .)
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v3
         with:
-          files: ${{ matrix.artifact_name }}.zip
+          files: |
+            meshdenoiser-linux.tar.gz
+            meshdenoiser-macos.tar.gz
+            meshdenoiser-windows.zip
           token: ${{ secrets.GITHUB_TOKEN }}
 
   swift-package:
     name: Swift Package (macOS)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Run package tests
         run: swift test

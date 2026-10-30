@@ -16,6 +16,8 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 *.cmake
+# ...but keep the project's own CMake modules
+!cmake/*.cmake
 
 # Compiled binaries
 *.exe
