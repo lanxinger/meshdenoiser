@@ -68,6 +68,53 @@ final class USDAMeshPatcherTests: XCTestCase {
         XCTAssertTrue(result.contains("point3f[] points = [(9, 9, 9), (8, 8, 8)]"), "non-mesh points must be left alone")
     }
 
+    /// A mesh whose points are a subset of another prim's must not claim that prim,
+    /// even when ModelIO lists it first.
+    func testSubsetMeshDoesNotClaimSupersetPrim() throws {
+        let text = """
+        #usda 1.0
+        def Mesh "Big"
+        {
+            int[] faceVertexCounts = [3, 3]
+            int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)]
+        }
+        def Mesh "Small"
+        {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        }
+        """
+        let small = Patch(originalPositions: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], denoisedPositions: [[0, 0, 5], [1, 0, 5], [0, 1, 5]])
+        let big = Patch(
+            originalPositions: [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            denoisedPositions: [[0, 0, 7], [1, 0, 7], [0, 1, 7], [0, 0, 8]]
+        )
+        let result = try patch(text, [small, big])
+        XCTAssertTrue(result.contains("def Mesh \"Big\"\n{\n    int[] faceVertexCounts = [3, 3]\n    int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]\n    point3f[] points = [(0, 0, 7), (1, 0, 7), (0, 1, 7), (0, 0, 8)]"), result)
+        XCTAssertTrue(result.contains("point3f[] points = [(0, 0, 5), (1, 0, 5), (0, 1, 5)]"), result)
+    }
+
+    /// ModelIO may split a USD point along seams; the split copies still cover it.
+    func testSplitVerticesMapBackOntoTheirPoint() throws {
+        let text = """
+        #usda 1.0
+        def Mesh "Tri"
+        {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        }
+        """
+        let split = Patch(
+            originalPositions: [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 0]],
+            denoisedPositions: [[0, 0, 1], [1, 0, 2], [0, 1, 2], [0, 0, 3]]
+        )
+        let result = try patch(text, [split])
+        XCTAssertTrue(result.contains("point3f[] points = [(0, 0, 2), (1, 0, 2), (0, 1, 2)]"), result)
+    }
+
     func testUnlocatableMeshThrows() {
         let text = "#usda 1.0\ndef Mesh \"A\"\n{\n    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]\n}\n"
         let other = Patch(originalPositions: [[3, 3, 3], [4, 3, 3], [3, 4, 3]], denoisedPositions: [[3, 3, 3], [4, 3, 3], [3, 4, 3]])

@@ -18,7 +18,7 @@ enum USDAMeshPatcher {
         let source = USDAText(text)
         var edits = [(range: Range<Int>, replacement: [UInt8])]()
         var matched = Array(repeating: false, count: denoisedMeshes.count)
-        var parsedMeshPoints = [[SIMD3<Float>]]()
+        var parsedMeshes = [(points: [SIMD3<Float>], requiredPoints: [Bool]?)]()
 
         for (ordinal, block) in source.meshBlocks().enumerated() {
             guard let pointsArray = source.arrayValue(named: "point3f[] points", in: block),
@@ -26,13 +26,20 @@ enum USDAMeshPatcher {
             else {
                 continue
             }
-            parsedMeshPoints.append(usdPoints)
+            let faceVertexIndices = source.arrayValue(named: "int[] faceVertexIndices", in: block)
+                .flatMap { source.parseIntArray($0) }
+            let requiredPoints = referencedPoints(faceVertexIndices, pointCount: usdPoints.count)
+            parsedMeshes.append((usdPoints, requiredPoints))
 
             // Prefer the mesh at the same position in ModelIO's order, then any other.
             let candidates = [ordinal] + Array(denoisedMeshes.indices).filter { $0 != ordinal }
             var newPoints: [SIMD3<Float>]?
             for candidate in candidates where denoisedMeshes.indices.contains(candidate) && !matched[candidate] {
-                if let mapped = mapDenoisedPositions(denoisedMeshes[candidate], onto: usdPoints) {
+                if let mapped = mapDenoisedPositions(
+                    denoisedMeshes[candidate],
+                    onto: usdPoints,
+                    requiredPoints: requiredPoints
+                ) {
                     matched[candidate] = true
                     newPoints = mapped
                     break
@@ -43,9 +50,8 @@ enum USDAMeshPatcher {
 
             guard recomputesNormals,
                   let countsArray = source.arrayValue(named: "int[] faceVertexCounts", in: block),
-                  let indicesArray = source.arrayValue(named: "int[] faceVertexIndices", in: block),
                   let faceVertexCounts = source.parseIntArray(countsArray),
-                  let faceVertexIndices = source.parseIntArray(indicesArray)
+                  let faceVertexIndices
             else {
                 continue
             }
@@ -78,7 +84,9 @@ enum USDAMeshPatcher {
 
         // A mesh ModelIO loaded once per instance of a shared prototype matches a patched block.
         for index in denoisedMeshes.indices where !matched[index] {
-            guard parsedMeshPoints.contains(where: { mapDenoisedPositions(denoisedMeshes[index], onto: $0) != nil }) else {
+            guard parsedMeshes.contains(where: {
+                mapDenoisedPositions(denoisedMeshes[index], onto: $0.points, requiredPoints: $0.requiredPoints) != nil
+            }) else {
                 throw UnmatchedMeshes()
             }
         }
@@ -86,12 +94,27 @@ enum USDAMeshPatcher {
         return source.applying(edits)
     }
 
+    /// Points referenced by the faces, or nil (treat every point as required) when the
+    /// indices are missing or malformed.
+    private static func referencedPoints(_ faceVertexIndices: [Int]?, pointCount: Int) -> [Bool]? {
+        guard let faceVertexIndices else { return nil }
+        var referenced = [Bool](repeating: false, count: pointCount)
+        for index in faceVertexIndices {
+            guard referenced.indices.contains(index) else { return nil }
+            referenced[index] = true
+        }
+        return referenced
+    }
+
     /// Maps ModelIO's per-vertex results onto the USD points, or returns nil when the
     /// mesh's original positions are not this USD mesh. ModelIO may split USD points
     /// along UV/normal seams; split copies are averaged back into their USD point.
+    /// Every required point (all points when `requiredPoints` is nil) must receive a
+    /// result, so a mesh whose points are a subset of another prim's cannot claim it.
     static func mapDenoisedPositions(
         _ mesh: MeshAssetDenoiser.DenoisedMeshPatch,
-        onto targetPositions: [SIMD3<Float>]
+        onto targetPositions: [SIMD3<Float>],
+        requiredPoints: [Bool]? = nil
     ) -> [SIMD3<Float>]? {
         let original = mesh.originalPositions
         guard original.count == mesh.denoisedPositions.count, !original.isEmpty else { return nil }
@@ -101,11 +124,16 @@ enum USDAMeshPatcher {
             return mesh.denoisedPositions
         }
 
+        // Coincident USD points share one representative and receive the same result.
         var targetIndexByKey = [PositionKey: Int](minimumCapacity: targetPositions.count)
+        var representative = [Int](repeating: 0, count: targetPositions.count)
         for (index, position) in targetPositions.enumerated() {
             guard let key = PositionKey(position) else { return nil }
-            if targetIndexByKey[key] == nil {
+            if let existing = targetIndexByKey[key] {
+                representative[index] = existing
+            } else {
                 targetIndexByKey[key] = index
+                representative[index] = index
             }
         }
 
@@ -120,8 +148,13 @@ enum USDAMeshPatcher {
         }
 
         var mapped = targetPositions
-        for index in mapped.indices where counts[index] > 0 {
-            mapped[index] = sums[index] / Float(counts[index])
+        for index in mapped.indices {
+            let group = representative[index]
+            if counts[group] > 0 {
+                mapped[index] = sums[group] / Float(counts[group])
+            } else if requiredPoints?[index] ?? true {
+                return nil
+            }
         }
         return mapped
     }
