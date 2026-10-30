@@ -8,6 +8,90 @@ final class GPUParityTests: XCTestCase {
         XCTAssertTrue(FilterGPU.faceNeighborRowsUseMetalUInt2LayoutForTesting())
     }
 
+    func testReductionThreadgroupWidthIsLargestPowerOfTwoUpTo256() {
+        XCTAssertEqual(FilterGPU.reductionThreadgroupWidth(maxTotalThreadsPerThreadgroup: 1_024), 256)
+        XCTAssertEqual(FilterGPU.reductionThreadgroupWidth(maxTotalThreadsPerThreadgroup: 256), 256)
+        XCTAssertEqual(FilterGPU.reductionThreadgroupWidth(maxTotalThreadsPerThreadgroup: 224), 128)
+        XCTAssertEqual(FilterGPU.reductionThreadgroupWidth(maxTotalThreadsPerThreadgroup: 192), 128)
+        XCTAssertEqual(FilterGPU.reductionThreadgroupWidth(maxTotalThreadsPerThreadgroup: 1), 1)
+        XCTAssertEqual(FilterGPU.reductionThreadgroupWidth(maxTotalThreadsPerThreadgroup: 0), 1)
+    }
+
+    func testPreparedMetalBuffersMatchCPUFilterOnFixture() throws {
+        guard FilterGPU.isAvailable else {
+            throw XCTSkip("Metal is not available on this host")
+        }
+
+        let fixtures = Bundle.module.resourceURL!.appendingPathComponent("Fixtures")
+        let fixture = try OBJLoader.load(fixtures.appendingPathComponent("noisy_icosphere.obj"))
+        let positions = fixture.positions.map { SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z)) }
+        let mesh = try MeshValidation.makeMesh(positions: positions, indices: fixture.indices)
+        let connectivity = try MeshConnectivity.build(mesh: mesh)
+        let guidance = GuidanceNormals.compute(connectivity: connectivity)
+        let params = NativeDenoiseParameters()
+        let etaPrime = Float(params.eta) * connectivity.averageNeighborFaceCentroidDistance
+
+        let precompute = try FilterPrecompute.buildForCPU(
+            centroids: connectivity.faceGeometry.centroids,
+            guidanceNormals: guidance,
+            initialNormals: connectivity.faceGeometry.normals,
+            areaWeights: connectivity.faceGeometry.areaWeights,
+            etaPrime: etaPrime,
+            parameters: params
+        )
+        let prepared = try FilterGPU.prepare(
+            centroids: connectivity.faceGeometry.centroids,
+            guidanceNormals: guidance,
+            initialNormals: connectivity.faceGeometry.normals,
+            areaWeights: connectivity.faceGeometry.areaWeights,
+            etaPrime: etaPrime,
+            parameters: params
+        )
+
+        // The buffers hold exactly the CPU build's rows and weights.
+        XCTAssertEqual(
+            prepared.rowValueBuffer.length,
+            precompute.faceNeighborRows.values.count * MemoryLayout<FaceNeighbor>.stride
+        )
+        let gpuRows = UnsafeBufferPointer(
+            start: prepared.rowValueBuffer.contents().bindMemory(
+                to: FaceNeighbor.self,
+                capacity: precompute.faceNeighborRows.values.count
+            ),
+            count: precompute.faceNeighborRows.values.count
+        )
+        XCTAssertEqual(Array(gpuRows), precompute.faceNeighborRows.values)
+        let gpuWeights = UnsafeBufferPointer(
+            start: prepared.staticWeightBuffer.contents().bindMemory(
+                to: Float.self,
+                capacity: precompute.staticWeights.count
+            ),
+            count: precompute.staticWeights.count
+        )
+        XCTAssertEqual(Array(gpuWeights), precompute.staticWeights)
+        XCTAssertEqual(prepared.convergenceThreshold, precompute.convergenceThreshold)
+
+        let cpu = try FilterCPU.run(
+            initialSignals: connectivity.faceGeometry.normals,
+            areaWeights: connectivity.faceGeometry.areaWeights,
+            precompute: precompute,
+            nu: Float(params.nu)
+        )
+        let gpu = try FilterGPU.run(
+            prepared: prepared,
+            initialSignals: connectivity.faceGeometry.normals,
+            areaWeights: connectivity.faceGeometry.areaWeights,
+            nu: Float(params.nu)
+        )
+
+        XCTAssertEqual(gpu.iterations, cpu.iterations)
+        var maxNormalError: Float = 0
+        for (got, want) in zip(gpu.signals, cpu.signals) {
+            maxNormalError = max(maxNormalError, simd.length(got - want))
+        }
+        XCTAssertLessThan(maxNormalError, 1e-4)
+    }
+
     func testMetalDisplacementReductionMatchesCPUFormula() throws {
         guard FilterGPU.isAvailable else {
             throw XCTSkip("Metal is not available on this host")

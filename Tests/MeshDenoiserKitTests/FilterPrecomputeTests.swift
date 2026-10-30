@@ -113,4 +113,57 @@ final class FilterPrecomputeTests: XCTestCase {
         XCTAssertEqual(gpu.weightedInitialSignals, cpu.weightedInitialSignals)
         XCTAssertEqual(gpu.rescaledLambda, cpu.rescaledLambda)
     }
+
+    func testCPUBuildSizesRowsExactlyAndMatchesMaterializedBuild() throws {
+        let sphere = FilterCPUTests.noisySphere(rings: 24, segments: 48)
+        let mesh = try MeshValidation.makeMesh(positions: sphere.positions, indices: sphere.indices)
+        let connectivity = try MeshConnectivity.build(mesh: mesh)
+        let guidance = GuidanceNormals.compute(connectivity: connectivity)
+        let etaPrime = Float(NativeDenoiseParameters().eta)
+            * connectivity.averageNeighborFaceCentroidDistance
+
+        let materialized = try FilterPrecompute.build(
+            centroids: connectivity.faceGeometry.centroids,
+            guidanceNormals: guidance,
+            initialNormals: connectivity.faceGeometry.normals,
+            areaWeights: connectivity.faceGeometry.areaWeights,
+            etaPrime: etaPrime,
+            parameters: NativeDenoiseParameters()
+        )
+        let streaming = try FilterPrecompute.buildForCPU(
+            centroids: connectivity.faceGeometry.centroids,
+            guidanceNormals: guidance,
+            initialNormals: connectivity.faceGeometry.normals,
+            areaWeights: connectivity.faceGeometry.areaWeights,
+            etaPrime: etaPrime,
+            parameters: NativeDenoiseParameters()
+        )
+
+        XCTAssertTrue(streaming.pairs.isEmpty)
+        XCTAssertEqual(streaming.staticWeights.count, materialized.pairs.count)
+        XCTAssertEqual(streaming.faceNeighborRows.values.count, 2 * materialized.pairs.count)
+        XCTAssertEqual(streaming.staticWeights, materialized.staticWeights)
+        XCTAssertEqual(streaming.faceNeighborRows.offsets, materialized.faceNeighborRows.offsets)
+        XCTAssertEqual(streaming.faceNeighborRows.values, materialized.faceNeighborRows.values)
+        XCTAssertEqual(streaming.weightedInitialSignals, materialized.weightedInitialSignals)
+        XCTAssertEqual(streaming.rescaledLambda, materialized.rescaledLambda)
+        XCTAssertEqual(streaming.convergenceThreshold, materialized.convergenceThreshold)
+    }
+
+    func testParallelNeighborCountsMatchPairEnumeration() throws {
+        let sphere = FilterCPUTests.noisySphere(rings: 24, segments: 48)
+        let mesh = try MeshValidation.makeMesh(positions: sphere.positions, indices: sphere.indices)
+        let connectivity = try MeshConnectivity.build(mesh: mesh)
+        let radius = 3 * Float(NativeDenoiseParameters().eta)
+            * connectivity.averageNeighborFaceCentroidDistance
+        let grid = try NeighborSearch.Grid(centroids: connectivity.faceGeometry.centroids, radius: radius)
+
+        var expected = [UInt32](repeating: 0, count: connectivity.faceGeometry.centroids.count)
+        try grid.forEachPair { pair in
+            expected[Int(pair.face0)] += 1
+            expected[Int(pair.face1)] += 1
+        }
+
+        XCTAssertEqual(try grid.neighborCounts(), expected)
+    }
 }

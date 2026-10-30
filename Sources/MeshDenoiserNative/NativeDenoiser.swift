@@ -1,8 +1,10 @@
 import Metal
 
 public enum NativeDenoiser {
+    /// True only when the Metal device, shader library and pipelines were all created,
+    /// so a `.nativeGPU` request cannot pass this check and then fail in `FilterGPU`.
     public static var isGPUAvailable: Bool {
-        MTLCreateSystemDefaultDevice() != nil
+        FilterGPU.isAvailable
     }
 
     /// Runs the native denoiser. The Metal path accelerates the fixed-point
@@ -36,7 +38,7 @@ public enum NativeDenoiser {
 
             let filteredNormals: [SIMD3<Float>]
             if useGPU {
-                var precompute = try FilterPrecompute.buildForGPU(
+                let prepared = try FilterGPU.prepare(
                     centroids: connectivity.faceGeometry.centroids,
                     guidanceNormals: guidanceNormals,
                     initialNormals: connectivity.faceGeometry.normals,
@@ -47,9 +49,9 @@ public enum NativeDenoiser {
                 )
                 try reportProgress(progressBase + 2, total: totalProgressStages, progress: progress)
                 filteredNormals = try FilterGPU.run(
+                    prepared: prepared,
                     initialSignals: connectivity.faceGeometry.normals,
                     areaWeights: connectivity.faceGeometry.areaWeights,
-                    precompute: &precompute,
                     nu: Float(parameters.nu),
                     shouldCancel: shouldCancel
                 ).signals
