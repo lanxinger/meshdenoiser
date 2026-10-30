@@ -21,8 +21,8 @@ public enum MeshDenoiser {
 
     /// Denoises a triangle mesh, preserving vertex count and order.
     ///
-    /// Runs the synchronous C++ filter on a global queue; supports Task cancellation
-    /// (checked after each outer iteration) and reports fractional progress.
+    /// Runs the synchronous filter on a global queue; supports Task cancellation
+    /// (checked between solver iterations) and reports fractional progress.
     /// - Returns: Denoised vertex positions, same count and order as `positions`.
     public static func denoise(
         positions: [SIMD3<Float>],
@@ -56,17 +56,52 @@ public enum MeshDenoiser {
         guard parameters.isValid else {
             throw MeshDenoiseError.invalidParameters
         }
+        guard indices.count.isMultiple(of: 3) else {
+            throw MeshDenoiseError.invalidInput
+        }
+        if session.isCancelled {
+            throw CancellationError()
+        }
 
-        switch parameters.backend {
-        case .reference:
-            return preserveCoincidentInputVertices(
-                try runReferenceSync(
-                    positions: positions,
-                    indices: indices,
+        // ModelIO and glTF split vertices along UV/normal seams, and flat-shaded assets split
+        // every triangle. Filter a welded copy so those seams are not treated as open
+        // boundaries; keep the input topology if welding would make the mesh invalid.
+        if let welded = WeldedMesh(positions: positions, indices: indices) {
+            do {
+                let denoised = try runBackend(
+                    positions: welded.positions,
+                    indices: welded.indices,
                     parameters: parameters,
                     session: session
-                ),
-                originalPositions: positions
+                )
+                return preserveCoincidentInputVertices(
+                    welded.scatter(denoised),
+                    originalPositions: positions
+                )
+            } catch MeshDenoiseError.invalidInput {
+                // Fall back to filtering the mesh exactly as given.
+            }
+        }
+
+        return preserveCoincidentInputVertices(
+            try runBackend(positions: positions, indices: indices, parameters: parameters, session: session),
+            originalPositions: positions
+        )
+    }
+
+    private static func runBackend(
+        positions: [SIMD3<Float>],
+        indices: [UInt32],
+        parameters: MeshDenoiseParameters,
+        session: DenoiseSession
+    ) throws -> [SIMD3<Float>] {
+        switch parameters.backend {
+        case .reference:
+            return try runReferenceSync(
+                positions: positions,
+                indices: indices,
+                parameters: parameters,
+                session: session
             )
         case .nativeGPU where !NativeDenoiser.isGPUAvailable:
             throw MeshDenoiseError.gpuUnavailable
@@ -88,20 +123,17 @@ public enum MeshDenoiser {
             native.outerIterations = parameters.outerIterations
 
             do {
-                return preserveCoincidentInputVertices(
-                    try NativeDenoiser.denoise(
-                        positions: positions,
-                        indices: indices,
-                        parameters: native,
-                        useGPU: useGPU,
-                        shouldCancel: { session.isCancelled },
-                        progress: { completed, total in
-                            if session.isCancelled { return false }
-                            session.progressHandler?(Double(completed) / Double(total))
-                            return true
-                        }
-                    ),
-                    originalPositions: positions
+                return try NativeDenoiser.denoise(
+                    positions: positions,
+                    indices: indices,
+                    parameters: native,
+                    useGPU: useGPU,
+                    shouldCancel: { session.isCancelled },
+                    progress: { completed, total in
+                        if session.isCancelled { return false }
+                        session.progressHandler?(Double(completed) / Double(total))
+                        return true
+                    }
                 )
             } catch NativeDenoiseError.cancelled {
                 throw CancellationError()
@@ -143,22 +175,29 @@ public enum MeshDenoiser {
             return denoisedPositions
         }
 
-        var groups = [CoincidentPositionKey: [Int]]()
-        groups.reserveCapacity(originalPositions.count)
+        // Representative (first) vertex of each coincidence group; summing in index order
+        // keeps the result identical to averaging each group's members directly.
+        var representativeByKey = [CoincidentPositionKey: Int](minimumCapacity: originalPositions.count)
+        var representative = [Int](repeating: 0, count: originalPositions.count)
+        var sums = [SIMD3<Float>](repeating: .zero, count: originalPositions.count)
+        var counts = [Int](repeating: 0, count: originalPositions.count)
         for (index, position) in originalPositions.enumerated() {
-            groups[CoincidentPositionKey(position: position, epsilon: epsilon), default: []].append(index)
+            var group = index
+            if let key = CoincidentPositionKey(position: position, epsilon: epsilon) {
+                if let existing = representativeByKey[key] {
+                    group = existing
+                } else {
+                    representativeByKey[key] = index
+                }
+            }
+            representative[index] = group
+            sums[group] += denoisedPositions[index]
+            counts[group] += 1
         }
 
         var output = denoisedPositions
-        for indices in groups.values where indices.count > 1 {
-            var average = SIMD3<Float>(repeating: 0)
-            for index in indices {
-                average += denoisedPositions[index]
-            }
-            average /= Float(indices.count)
-            for index in indices {
-                output[index] = average
-            }
+        for index in output.indices where counts[representative[index]] > 1 {
+            output[index] = sums[representative[index]] / Float(counts[representative[index]])
         }
         return output
     }
@@ -195,12 +234,15 @@ public enum MeshDenoiser {
             session.progressHandler?(Double(completed) / Double(total))
             return true
         }
+        let cancelCheck: md_cancel_fn = { rawCtx in
+            Unmanaged<DenoiseSession>.fromOpaque(rawCtx!).takeUnretainedValue().isCancelled
+        }
 
         let status = withExtendedLifetime(session) {
             md_denoise(flat, positions.count,
                        indices, indices.count / 3,
                        &cParams, &out,
-                       callback, Unmanaged.passUnretained(session).toOpaque())
+                       callback, cancelCheck, Unmanaged.passUnretained(session).toOpaque())
         }
 
         switch status {
@@ -225,9 +267,70 @@ private struct CoincidentPositionKey: Hashable {
     var y: Int64
     var z: Int64
 
-    init(position: SIMD3<Float>, epsilon: Float) {
-        x = Int64((position.x / epsilon).rounded())
-        y = Int64((position.y / epsilon).rounded())
-        z = Int64((position.z / epsilon).rounded())
+    /// Nil when the quantized position does not fit (non-finite or extreme coordinates).
+    init?(position: SIMD3<Float>, epsilon: Float) {
+        guard let x = Int64(exactly: (position.x / epsilon).rounded()),
+              let y = Int64(exactly: (position.y / epsilon).rounded()),
+              let z = Int64(exactly: (position.z / epsilon).rounded())
+        else {
+            return nil
+        }
+        self.x = x
+        self.y = y
+        self.z = z
+    }
+}
+
+/// Vertices merged by exact position, plus the map back to the caller's vertices.
+struct WeldedMesh {
+    var positions: [SIMD3<Float>]
+    var indices: [UInt32]
+    /// Welded vertex index for each input vertex.
+    var weldedIndexOfVertex: [UInt32]
+
+    /// Returns nil when no vertices coincide, or when merging would leave a face with a
+    /// repeated vertex (in which case the input is filtered as given).
+    init?(positions inputPositions: [SIMD3<Float>], indices inputIndices: [UInt32]) {
+        var indexOfPosition = [SIMD3<Float>: UInt32](minimumCapacity: inputPositions.count)
+        var weldedPositions = [SIMD3<Float>]()
+        weldedPositions.reserveCapacity(inputPositions.count)
+        var weldedIndexOfVertex = [UInt32]()
+        weldedIndexOfVertex.reserveCapacity(inputPositions.count)
+        for position in inputPositions {
+            if let existing = indexOfPosition[position] {
+                weldedIndexOfVertex.append(existing)
+            } else {
+                let index = UInt32(weldedPositions.count)
+                indexOfPosition[position] = index
+                weldedPositions.append(position)
+                weldedIndexOfVertex.append(index)
+            }
+        }
+        guard weldedPositions.count < inputPositions.count else { return nil }
+
+        var weldedIndices = [UInt32]()
+        weldedIndices.reserveCapacity(inputIndices.count)
+        for offset in stride(from: 0, to: inputIndices.count - 2, by: 3) {
+            let a = inputIndices[offset], b = inputIndices[offset + 1], c = inputIndices[offset + 2]
+            guard a < inputPositions.count, b < inputPositions.count, c < inputPositions.count else {
+                return nil
+            }
+            let wa = weldedIndexOfVertex[Int(a)]
+            let wb = weldedIndexOfVertex[Int(b)]
+            let wc = weldedIndexOfVertex[Int(c)]
+            guard wa != wb, wb != wc, wa != wc else { return nil }
+            weldedIndices.append(wa)
+            weldedIndices.append(wb)
+            weldedIndices.append(wc)
+        }
+
+        positions = weldedPositions
+        indices = weldedIndices
+        self.weldedIndexOfVertex = weldedIndexOfVertex
+    }
+
+    /// Maps per-welded-vertex results back to the caller's vertex order.
+    func scatter(_ weldedResult: [SIMD3<Float>]) -> [SIMD3<Float>] {
+        weldedIndexOfVertex.map { weldedResult[Int($0)] }
     }
 }

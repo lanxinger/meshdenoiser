@@ -18,12 +18,10 @@ final class BenchmarkCLITests: XCTestCase {
     }
 
     private func runBench(_ arguments: [String]) throws -> (status: Int32, stdout: String, stderr: String) {
-        let packageRoot = URL(fileURLWithPath: #filePath)
+        // Executables are built next to the test bundle, whatever the configuration or scratch path.
+        let executable = Bundle(for: Self.self).bundleURL
             .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let executable = packageRoot
-            .appendingPathComponent(".build/debug/MeshDenoiserBench")
+            .appendingPathComponent("MeshDenoiserBench")
 
         let process = Process()
         process.executableURL = executable

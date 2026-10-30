@@ -99,11 +99,6 @@ public enum MeshAssetDenoiser {
         var denoisedPositions: [SIMD3<Float>]
     }
 
-    private struct USDAArrayStatement {
-        var statementRange: Range<String.Index>
-        var arrayRange: Range<String.Index>
-    }
-
     /// Inspects an asset file and returns the mesh counts and preprocessing
     /// diagnostics that processing would use, without denoising or exporting.
     public static func preflight(
@@ -468,262 +463,88 @@ public enum MeshAssetDenoiser {
 
         try runTool("/usr/bin/ditto", arguments: ["-x", "-k", inputURL.path, workingDirectory.path])
 
-        let rootURL = try rootUSDFile(in: workingDirectory)
-        let usdaURL = workingDirectory.appendingPathComponent("denoised.usda")
+        // Write the patched layer next to the root layer so its relative asset paths still resolve.
+        let rootPath = try rootLayerPath(ofUSDZ: inputURL, extractedTo: workingDirectory)
+        let rootDirectory = (rootPath as NSString).deletingLastPathComponent
+        var usdaName = "denoised.usda"
+        if fileManager.fileExists(atPath: workingDirectory.appendingPathComponent(rootDirectory).appendingPathComponent(usdaName).path) {
+            usdaName = "denoised-\(UUID().uuidString).usda"
+        }
+        let usdaPath = rootDirectory.isEmpty ? usdaName : rootDirectory + "/" + usdaName
+        let rootURL = workingDirectory.appendingPathComponent(rootPath)
+        let usdaURL = workingDirectory.appendingPathComponent(usdaPath)
+
+        // Patch the root layer as authored; if meshes live in other layers (references,
+        // sublayers), patch a flattened copy of the composed stage instead.
         try runTool("/usr/bin/usdcat", arguments: [rootURL.path, "-o", usdaURL.path])
-        try patchUSDAPoints(at: usdaURL, denoisedMeshes: denoisedMeshes, recomputesNormals: recomputesNormals)
+        do {
+            try patchUSDAPoints(at: usdaURL, denoisedMeshes: denoisedMeshes, recomputesNormals: recomputesNormals)
+        } catch is USDAMeshPatcher.UnmatchedMeshes {
+            try runTool("/usr/bin/usdcat", arguments: ["--flatten", rootURL.path, "-o", usdaURL.path])
+            do {
+                try patchUSDAPoints(at: usdaURL, denoisedMeshes: denoisedMeshes, recomputesNormals: recomputesNormals)
+            } catch is USDAMeshPatcher.UnmatchedMeshes {
+                throw MeshAssetDenoiseError.exportFailed("Denoised meshes could not be located in \(inputURL.lastPathComponent).")
+            }
+        }
         try runTool(
             "/usr/bin/usdzip",
-            arguments: [outputURL.path, "--asset", usdaURL.lastPathComponent],
+            arguments: [outputURL.path, "--asset", usdaPath],
             currentDirectoryURL: workingDirectory
         )
     }
 
-    private static func rootUSDFile(in directory: URL) throws -> URL {
-        let contents = try FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        )
-
-        let usdFiles = contents.filter { url in
-            let pathExtension = url.pathExtension.lowercased()
-            return pathExtension == "usd" || pathExtension == "usda" || pathExtension == "usdc"
+    /// The USDZ spec makes the first file in the archive the root layer, so read the
+    /// first local file header rather than guessing from the extracted file names.
+    static func rootLayerPath(ofUSDZ archiveURL: URL, extractedTo directory: URL) throws -> String {
+        if let path = try firstArchiveEntryName(archiveURL),
+           ["usd", "usda", "usdc"].contains((path as NSString).pathExtension.lowercased()),
+           !path.hasPrefix("/"),
+           !path.split(separator: "/").contains(".."),
+           FileManager.default.fileExists(atPath: directory.appendingPathComponent(path).path) {
+            return path
         }
 
-        guard let root = usdFiles.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).first else {
+        // Non-conforming archive: fall back to a top-level USD layer.
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        guard let root = contents
+            .map(\.lastPathComponent)
+            .filter({ ["usd", "usda", "usdc"].contains(($0 as NSString).pathExtension.lowercased()) })
+            .sorted()
+            .first
+        else {
             throw MeshAssetDenoiseError.exportFailed(directory.path)
         }
         return root
     }
 
+    private static func firstArchiveEntryName(_ archiveURL: URL) throws -> String? {
+        let handle = try FileHandle(forReadingFrom: archiveURL)
+        defer { try? handle.close() }
+        guard let header = try handle.read(upToCount: 30), header.count == 30 else { return nil }
+        let bytes = [UInt8](header)
+        func uint16(_ offset: Int) -> Int { Int(bytes[offset]) | Int(bytes[offset + 1]) << 8 }
+        // Local file header signature "PK\u{3}\u{4}".
+        guard bytes[0] == 0x50, bytes[1] == 0x4B, bytes[2] == 0x03, bytes[3] == 0x04 else { return nil }
+        let nameLength = uint16(26)
+        guard nameLength > 0, let name = try handle.read(upToCount: nameLength), name.count == nameLength else {
+            return nil
+        }
+        return String(data: name, encoding: .utf8)
+    }
+
     static func patchUSDAPoints(at url: URL, denoisedMeshes: [DenoisedMeshPatch], recomputesNormals: Bool) throws {
-        var text = try String(contentsOf: url, encoding: .utf8)
-        var searchStart = text.startIndex
-
-        for mesh in denoisedMeshes {
-            let faceVertexCountsStatement = try nextUSDAArrayStatement(
-                named: "int[] faceVertexCounts =",
-                in: text,
-                from: searchStart
-            )
-            let faceVertexIndicesStatement = try nextUSDAArrayStatement(
-                named: "int[] faceVertexIndices =",
-                in: text,
-                from: searchStart
-            )
-            let normalsStatement = recomputesNormals ? nextUSDAArrayStatementIfPresent(
-                named: "normal3f[] normals =",
-                in: text,
-                from: searchStart
-            ) : nil
-            let pointsStatement = try nextUSDAArrayStatement(
-                named: "point3f[] points =",
-                in: text,
-                from: searchStart
-            )
-            let usdPositions = try parseUSDAPointArray(text[pointsStatement.arrayRange])
-            let mappedPositions = try mapDenoisedPositionsToTargetGeometry(
-                originalPositions: mesh.originalPositions,
-                denoisedPositions: mesh.denoisedPositions,
-                targetPositions: usdPositions
-            )
-            let faceVertexCounts = try parseUSDAIntArray(text[faceVertexCountsStatement.arrayRange])
-            let faceVertexIndices = try parseUSDAIntArray(text[faceVertexIndicesStatement.arrayRange])
-            let replacementNormals = try normalsStatement.flatMap { statement -> String? in
-                let existingNormals = try parseUSDAPointArray(text[statement.arrayRange])
-                guard existingNormals.count == mappedPositions.count else {
-                    return nil
-                }
-                let normals = try recomputeVertexNormals(
-                    positions: mappedPositions,
-                    faceVertexCounts: faceVertexCounts,
-                    faceVertexIndices: faceVertexIndices
-                )
-                return "normal3f[] normals = \(usdaTupleArray(normals))"
-            }
-            let replacement = "point3f[] points = \(usdaPointArray(mappedPositions))"
-            let pointEndOffset = text.distance(from: text.startIndex, to: pointsStatement.statementRange.lowerBound)
-                + replacement.count
-            let normalOffsetDelta: Int
-            if let normalsStatement, let replacementNormals {
-                normalOffsetDelta = replacementNormals.count
-                    - text.distance(from: normalsStatement.statementRange.lowerBound, to: normalsStatement.statementRange.upperBound)
-            } else {
-                normalOffsetDelta = 0
-            }
-            text.replaceSubrange(pointsStatement.statementRange, with: replacement)
-            if let normalsStatement, let replacementNormals {
-                text.replaceSubrange(normalsStatement.statementRange, with: replacementNormals)
-            }
-            searchStart = text.index(text.startIndex, offsetBy: pointEndOffset + normalOffsetDelta)
-        }
-
-        if nextUSDAArrayStatementIfPresent(named: "point3f[] points =", in: text, from: searchStart) != nil {
-            throw MeshAssetDenoiseError.exportFailed(url.path)
-        }
-
-        try text.write(to: url, atomically: true, encoding: .utf8)
-    }
-
-    private static func nextUSDAArrayStatement(
-        named name: String,
-        in text: String,
-        from start: String.Index
-    ) throws -> USDAArrayStatement {
-        guard let range = nextUSDAArrayStatementIfPresent(named: name, in: text, from: start) else {
-            throw MeshAssetDenoiseError.exportFailed("USD array was not found: \(name)")
-        }
-        return range
-    }
-
-    private static func nextUSDAArrayStatementIfPresent(
-        named name: String,
-        in text: String,
-        from start: String.Index
-    ) -> USDAArrayStatement? {
-        guard let statementStart = text.range(
-            of: name,
-            range: start..<text.endIndex
-        )?.lowerBound else {
-            return nil
-        }
-
-        let assignmentEnd = text.index(statementStart, offsetBy: name.count)
-        guard let arrayStart = text[assignmentEnd...].firstIndex(of: "[") else {
-            return nil
-        }
-
-        var depth = 0
-        var index = arrayStart
-        while index < text.endIndex {
-            let character = text[index]
-            if character == "[" {
-                depth += 1
-            } else if character == "]" {
-                depth -= 1
-                if depth == 0 {
-                    let arrayEnd = text.index(after: index)
-                    return USDAArrayStatement(
-                        statementRange: statementStart..<arrayEnd,
-                        arrayRange: arrayStart..<arrayEnd
-                    )
-                }
-            }
-            index = text.index(after: index)
-        }
-        return nil
-    }
-
-    private static func parseUSDAPointArray(_ arrayText: Substring) throws -> [SIMD3<Float>] {
-        var positions = [SIMD3<Float>]()
-        var index = arrayText.startIndex
-
-        while let tupleStart = arrayText[index...].firstIndex(of: "(") {
-            guard let tupleEnd = arrayText[tupleStart...].firstIndex(of: ")") else {
-                throw MeshAssetDenoiseError.exportFailed("USD points array is malformed.")
-            }
-
-            let values = arrayText[arrayText.index(after: tupleStart)..<tupleEnd]
-                .split(separator: ",")
-                .map { value in
-                    Float(value.trimmingCharacters(in: .whitespacesAndNewlines))
-                }
-
-            guard values.count == 3,
-                  let x = values[0],
-                  let y = values[1],
-                  let z = values[2]
-            else {
-                throw MeshAssetDenoiseError.exportFailed("USD point tuple is malformed.")
-            }
-
-            positions.append(SIMD3<Float>(x, y, z))
-            index = arrayText.index(after: tupleEnd)
-        }
-
-        guard !positions.isEmpty else {
-            throw MeshAssetDenoiseError.exportFailed("USD points array is empty.")
-        }
-        return positions
-    }
-
-    private static func parseUSDAIntArray(_ arrayText: Substring) throws -> [Int] {
-        let values = arrayText
-            .dropFirst()
-            .dropLast()
-            .split(separator: ",")
-            .map { value in
-                Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
-        guard !values.isEmpty, values.allSatisfy({ $0 != nil }) else {
-            throw MeshAssetDenoiseError.exportFailed("USD integer array is malformed.")
-        }
-        return values.compactMap { $0 }
-    }
-
-    private static func usdaPointArray(_ positions: [SIMD3<Float>]) -> String {
-        usdaTupleArray(positions)
-    }
-
-    private static func usdaTupleArray(_ positions: [SIMD3<Float>]) -> String {
-        var points = [String]()
-        points.reserveCapacity(positions.count)
-        for position in positions {
-            points.append("(\(usdaFloat(position.x)), \(usdaFloat(position.y)), \(usdaFloat(position.z)))")
-        }
-        return "[\(points.joined(separator: ", "))]"
-    }
-
-    private static func recomputeVertexNormals(
-        positions: [SIMD3<Float>],
-        faceVertexCounts: [Int],
-        faceVertexIndices: [Int]
-    ) throws -> [SIMD3<Float>] {
-        var normals = Array(repeating: SIMD3<Float>(0, 0, 0), count: positions.count)
-        var cursor = 0
-        for faceVertexCount in faceVertexCounts {
-            guard faceVertexCount >= 3, cursor + faceVertexCount <= faceVertexIndices.count else {
-                throw MeshAssetDenoiseError.exportFailed("USD face index array is malformed.")
-            }
-            let baseIndex = faceVertexIndices[cursor]
-            for localIndex in 1..<(faceVertexCount - 1) {
-                let index0 = baseIndex
-                let index1 = faceVertexIndices[cursor + localIndex]
-                let index2 = faceVertexIndices[cursor + localIndex + 1]
-                guard positions.indices.contains(index0),
-                      positions.indices.contains(index1),
-                      positions.indices.contains(index2)
-                else {
-                    throw MeshAssetDenoiseError.exportFailed("USD face index references missing points.")
-                }
-                let normal = cross(positions[index1] - positions[index0], positions[index2] - positions[index0])
-                normals[index0] += normal
-                normals[index1] += normal
-                normals[index2] += normal
-            }
-            cursor += faceVertexCount
-        }
-        guard cursor == faceVertexIndices.count else {
-            throw MeshAssetDenoiseError.exportFailed("USD face index array has trailing values.")
-        }
-        return normals.map { normal in
-            let length = sqrt(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z)
-            guard length > 0 else { return SIMD3<Float>(0, 1, 0) }
-            return normal / length
-        }
-    }
-
-    private static func cross(_ lhs: SIMD3<Float>, _ rhs: SIMD3<Float>) -> SIMD3<Float> {
-        SIMD3<Float>(
-            lhs.y * rhs.z - lhs.z * rhs.y,
-            lhs.z * rhs.x - lhs.x * rhs.z,
-            lhs.x * rhs.y - lhs.y * rhs.x
+        let text = [UInt8](try Data(contentsOf: url))
+        let patched = try USDAMeshPatcher.patch(
+            text,
+            denoisedMeshes: denoisedMeshes,
+            recomputesNormals: recomputesNormals
         )
-    }
-
-    private static func usdaFloat(_ value: Float) -> String {
-        String(format: "%.9g", locale: Locale(identifier: "en_US_POSIX"), Double(value))
+        try Data(patched).write(to: url, options: .atomic)
     }
 
     static func runTool(
@@ -759,54 +580,6 @@ public enum MeshAssetDenoiser {
         guard process.terminationStatus == 0 else {
             let message = String(data: diagnostics, encoding: .utf8) ?? executablePath
             throw MeshAssetDenoiseError.exportFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-    }
-
-    private static func mapDenoisedPositionsToTargetGeometry(
-        originalPositions: [SIMD3<Float>],
-        denoisedPositions: [SIMD3<Float>],
-        targetPositions: [SIMD3<Float>]
-    ) throws -> [SIMD3<Float>] {
-        guard originalPositions.count == denoisedPositions.count else {
-            throw MeshAssetDenoiseError.unsupportedAsset("Denoised positions cannot be mapped back to the original asset.")
-        }
-        if denoisedPositions.count == targetPositions.count {
-            return denoisedPositions
-        }
-
-        var targetIndexByPosition = [PositionKey: Int](minimumCapacity: targetPositions.count)
-        for (index, position) in targetPositions.enumerated() {
-            targetIndexByPosition[PositionKey(position)] = index
-        }
-
-        var sums = Array(repeating: SIMD3<Float>(0, 0, 0), count: targetPositions.count)
-        var counts = Array(repeating: 0, count: targetPositions.count)
-        for (originalPosition, denoisedPosition) in zip(originalPositions, denoisedPositions) {
-            guard let targetIndex = targetIndexByPosition[PositionKey(originalPosition)] else {
-                throw MeshAssetDenoiseError.unsupportedAsset("ModelIO and USDZ position buffers could not be reconciled.")
-            }
-            sums[targetIndex] += denoisedPosition
-            counts[targetIndex] += 1
-        }
-
-        var mappedPositions = targetPositions
-        for index in mappedPositions.indices where counts[index] > 0 {
-            mappedPositions[index] = sums[index] / Float(counts[index])
-        }
-        return mappedPositions
-    }
-
-    private struct PositionKey: Hashable {
-        private static let scale: Float = 1_000_000
-
-        var x: Int
-        var y: Int
-        var z: Int
-
-        init(_ position: SIMD3<Float>) {
-            x = Int((position.x * Self.scale).rounded())
-            y = Int((position.y * Self.scale).rounded())
-            z = Int((position.z * Self.scale).rounded())
         }
     }
 
@@ -860,19 +633,39 @@ public enum MeshAssetDenoiser {
             throw MeshAssetDenoiseError.unsupportedAsset("Mesh is missing float3 positions.")
         }
 
-        let stride = attributeData.stride
-        let vertexCount = mesh.vertexCount
-        let dataStart = attributeData.dataStart
-        var positions = [SIMD3<Float>]()
-        positions.reserveCapacity(vertexCount)
-
-        for vertexIndex in 0..<vertexCount {
-            let pointer = dataStart
-                .advanced(by: vertexIndex * stride)
-                .assumingMemoryBound(to: SIMD3<Float>.self)
-            positions.append(pointer.pointee)
+        return withExtendedLifetime(attributeData) {
+            readFloat3Attribute(
+                at: UnsafeRawPointer(attributeData.dataStart),
+                stride: attributeData.stride,
+                count: mesh.vertexCount
+            )
         }
-        return positions
+    }
+
+    /// Reads packed float3 values. ModelIO's `.float3` is 12 bytes, whereas
+    /// `SIMD3<Float>` is 16, so loading or storing a whole `SIMD3<Float>` would
+    /// touch the first 4 bytes of the next attribute (or run past the buffer).
+    static func readFloat3Attribute(at dataStart: UnsafeRawPointer, stride: Int, count: Int) -> [SIMD3<Float>] {
+        var values = [SIMD3<Float>]()
+        values.reserveCapacity(count)
+        for index in 0..<count {
+            let offset = index * stride
+            values.append(SIMD3<Float>(
+                dataStart.loadUnaligned(fromByteOffset: offset, as: Float.self),
+                dataStart.loadUnaligned(fromByteOffset: offset + 4, as: Float.self),
+                dataStart.loadUnaligned(fromByteOffset: offset + 8, as: Float.self)
+            ))
+        }
+        return values
+    }
+
+    static func writeFloat3Attribute(_ values: [SIMD3<Float>], to dataStart: UnsafeMutableRawPointer, stride: Int) {
+        for (index, value) in values.enumerated() {
+            let offset = index * stride
+            dataStart.storeBytes(of: value.x, toByteOffset: offset, as: Float.self)
+            dataStart.storeBytes(of: value.y, toByteOffset: offset + 4, as: Float.self)
+            dataStart.storeBytes(of: value.z, toByteOffset: offset + 8, as: Float.self)
+        }
     }
 
     private static func writePositions(_ positions: [SIMD3<Float>], to mesh: MDLMesh) throws {
@@ -890,13 +683,8 @@ public enum MeshAssetDenoiser {
             }
         }
 
-        let stride = attributeData.stride
-        let dataStart = attributeData.dataStart
-        for (vertexIndex, position) in positions.enumerated() {
-            let pointer = dataStart
-                .advanced(by: vertexIndex * stride)
-                .assumingMemoryBound(to: SIMD3<Float>.self)
-            pointer.pointee = position
+        withExtendedLifetime(attributeData) {
+            writeFloat3Attribute(positions, to: attributeData.dataStart, stride: attributeData.stride)
         }
     }
 
@@ -927,19 +715,16 @@ public enum MeshAssetDenoiser {
         }
 
         let indexBuffer = triangleSubmesh.indexBuffer(asIndexType: .uInt32)
-        let map = indexBuffer.map()
-        let pointer = map.bytes.assumingMemoryBound(to: UInt32.self)
         let count = triangleSubmesh.indexCount
         guard count.isMultiple(of: 3) else {
             throw MeshAssetDenoiseError.unsupportedAsset("Triangle index count is not divisible by 3.")
         }
 
-        var indices = [UInt32]()
-        indices.reserveCapacity(count)
-        for index in 0..<count {
-            indices.append(pointer[index])
+        // The mapped bytes are only valid while the map object is alive.
+        let map = indexBuffer.map()
+        return withExtendedLifetime(map) {
+            Array(UnsafeBufferPointer(start: map.bytes.assumingMemoryBound(to: UInt32.self), count: count))
         }
-        return indices
     }
 
 }

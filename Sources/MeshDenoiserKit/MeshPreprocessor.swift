@@ -154,7 +154,9 @@ public enum MeshPreprocessor {
         weldedPositions.reserveCapacity(positions.count)
 
         for (oldIndex, position) in positions.enumerated() {
-            let key = PositionKey(position: position, epsilon: epsilon)
+            guard let key = PositionKey(position: position, epsilon: epsilon) else {
+                throw MeshDenoiseError.invalidInput   // weldEpsilon too small for these coordinates
+            }
             if let newIndex = keyToNewIndex[key] {
                 oldToNew[oldIndex] = newIndex
             } else {
@@ -200,7 +202,9 @@ public enum MeshPreprocessor {
                 continue
             }
 
-            filtered += [a, b, c]
+            filtered.append(a)
+            filtered.append(b)
+            filtered.append(c)
         }
 
         return (filtered, removedDegenerateFaces, removedDuplicateFaces)
@@ -230,7 +234,9 @@ public enum MeshPreprocessor {
         filtered.reserveCapacity(indices.count)
         for faceIndex in 0..<faceCount where !removedFaces.contains(faceIndex) {
             let offset = faceIndex * 3
-            filtered += [indices[offset], indices[offset + 1], indices[offset + 2]]
+            filtered.append(indices[offset])
+            filtered.append(indices[offset + 1])
+            filtered.append(indices[offset + 2])
         }
 
         return (filtered, removedFaces.count)
@@ -249,9 +255,10 @@ public enum MeshPreprocessor {
 
         var facesByEdge = [MeshEdgeKey: [Int]]()
         for (faceIndex, triangle) in triangles.enumerated() {
-            for edge in triangle.undirectedEdges {
-                facesByEdge[edge, default: []].append(faceIndex)
-            }
+            let edges = triangle.undirectedEdges
+            facesByEdge[edges.0, default: []].append(faceIndex)
+            facesByEdge[edges.1, default: []].append(faceIndex)
+            facesByEdge[edges.2, default: []].append(faceIndex)
         }
 
         var visited = Array(repeating: false, count: triangles.count)
@@ -264,7 +271,8 @@ public enum MeshPreprocessor {
                 let faceIndex = queue[readIndex]
                 readIndex += 1
 
-                for edge in triangles[faceIndex].undirectedEdges {
+                let edges = triangles[faceIndex].undirectedEdges
+                for edge in [edges.0, edges.1, edges.2] {
                     guard let neighbors = facesByEdge[edge] else { continue }
                     for neighbor in neighbors where neighbor != faceIndex && !visited[neighbor] {
                         if triangles[faceIndex].direction(for: edge) == triangles[neighbor].direction(for: edge) {
@@ -280,7 +288,9 @@ public enum MeshPreprocessor {
         var oriented = [UInt32]()
         oriented.reserveCapacity(indices.count)
         for triangle in triangles {
-            oriented += [triangle.a, triangle.b, triangle.c]
+            oriented.append(triangle.a)
+            oriented.append(triangle.b)
+            oriented.append(triangle.c)
         }
         return oriented
     }
@@ -291,10 +301,10 @@ public enum MeshPreprocessor {
             let a = indices[offset]
             let b = indices[offset + 1]
             let c = indices[offset + 2]
-            for edge in [DirectedMeshEdge(a, b), DirectedMeshEdge(b, c), DirectedMeshEdge(c, a)] {
-                if !seen.insert(edge).inserted {
-                    return true
-                }
+            if !seen.insert(DirectedMeshEdge(a, b)).inserted
+                || !seen.insert(DirectedMeshEdge(b, c)).inserted
+                || !seen.insert(DirectedMeshEdge(c, a)).inserted {
+                return true
             }
         }
         return false
@@ -304,20 +314,17 @@ public enum MeshPreprocessor {
         positions: [SIMD3<Float>],
         indices: [UInt32]
     ) -> (positions: [SIMD3<Float>], indices: [UInt32]) {
-        var oldToNew = [UInt32: UInt32]()
+        var oldToNew = [UInt32](repeating: .max, count: positions.count)
         var compactPositions = [SIMD3<Float>]()
         var compactIndices = [UInt32]()
         compactIndices.reserveCapacity(indices.count)
 
         for index in indices {
-            if let newIndex = oldToNew[index] {
-                compactIndices.append(newIndex)
-            } else {
-                let newIndex = UInt32(compactPositions.count)
-                oldToNew[index] = newIndex
-                compactIndices.append(newIndex)
+            if oldToNew[Int(index)] == .max {
+                oldToNew[Int(index)] = UInt32(compactPositions.count)
                 compactPositions.append(positions[Int(index)])
             }
+            compactIndices.append(oldToNew[Int(index)])
         }
 
         return (compactPositions, compactIndices)
@@ -387,12 +394,8 @@ private struct Triangle {
     var b: UInt32
     var c: UInt32
 
-    var undirectedEdges: [MeshEdgeKey] {
-        [
-            MeshEdgeKey(a, b),
-            MeshEdgeKey(b, c),
-            MeshEdgeKey(c, a),
-        ]
+    var undirectedEdges: (MeshEdgeKey, MeshEdgeKey, MeshEdgeKey) {
+        (MeshEdgeKey(a, b), MeshEdgeKey(b, c), MeshEdgeKey(c, a))
     }
 
     mutating func flip() {
@@ -421,10 +424,16 @@ private struct PositionKey: Hashable {
     var y: Int64
     var z: Int64
 
-    init(position: SIMD3<Float>, epsilon: Float) {
-        x = Int64((position.x / epsilon).rounded())
-        y = Int64((position.y / epsilon).rounded())
-        z = Int64((position.z / epsilon).rounded())
+    init?(position: SIMD3<Float>, epsilon: Float) {
+        guard let x = Int64(exactly: (position.x / epsilon).rounded()),
+              let y = Int64(exactly: (position.y / epsilon).rounded()),
+              let z = Int64(exactly: (position.z / epsilon).rounded())
+        else {
+            return nil
+        }
+        self.x = x
+        self.y = y
+        self.z = z
     }
 }
 
@@ -434,10 +443,13 @@ private struct FaceKey: Hashable {
     var c: UInt32
 
     init(_ first: UInt32, _ second: UInt32, _ third: UInt32) {
-        let sorted = [first, second, third].sorted()
-        a = sorted[0]
-        b = sorted[1]
-        c = sorted[2]
+        var (low, mid, high) = (first, second, third)
+        if low > mid { swap(&low, &mid) }
+        if mid > high { swap(&mid, &high) }
+        if low > mid { swap(&low, &mid) }
+        a = low
+        b = mid
+        c = high
     }
 }
 

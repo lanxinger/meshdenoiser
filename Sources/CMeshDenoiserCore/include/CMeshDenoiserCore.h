@@ -35,18 +35,22 @@ typedef enum {
 // Called after each completed outer iteration. Return false to cancel.
 typedef bool (*md_progress_fn)(int completed_outer, int total_outer, void *ctx);
 
+// Polled between solver iterations, so a run can stop within an outer iteration.
+// Return true to cancel.
+typedef bool (*md_cancel_fn)(void *ctx);
+
 // Fills params with the tuned defaults from MeshDenoiserDefaults.txt.
 void md_params_init_defaults(md_params *params);
 
 // vertices: xyz triples, vertex_count points.
 // indices: 3 per triangle, triangle_count triangles, each index < vertex_count.
 // out_vertices: caller-allocated, 3 * vertex_count floats. Written only on MD_OK.
-// progress may be NULL; ctx is passed through to it.
+// progress and cancel may be NULL; ctx is passed through to both.
 md_status md_denoise(const float *vertices, size_t vertex_count,
                      const uint32_t *indices, size_t triangle_count,
                      const md_params *params,
                      float *out_vertices,
-                     md_progress_fn progress, void *ctx);
+                     md_progress_fn progress, md_cancel_fn cancel, void *ctx);
 
 #ifdef __cplusplus
 }

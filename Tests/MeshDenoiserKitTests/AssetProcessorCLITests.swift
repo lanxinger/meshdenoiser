@@ -29,12 +29,10 @@ final class AssetProcessorCLITests: XCTestCase {
     }
 
     private func runProcessor(_ arguments: [String]) throws -> (status: Int32, stdout: String, stderr: String) {
-        let packageRoot = URL(fileURLWithPath: #filePath)
+        // Executables are built next to the test bundle, whatever the configuration or scratch path.
+        let executable = Bundle(for: Self.self).bundleURL
             .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let executable = packageRoot
-            .appendingPathComponent(".build/debug/MeshDenoiserProcess")
+            .appendingPathComponent("MeshDenoiserProcess")
 
         let process = Process()
         process.executableURL = executable
